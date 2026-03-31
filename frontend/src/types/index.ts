@@ -57,6 +57,7 @@ export interface LoginRequest {
 }
 
 export interface RegisterRequest {
+  username: string
   email: string
   password: string
   verify_code?: string
@@ -1052,6 +1053,9 @@ export interface AdminUsageLog extends UsageLog {
   // 用户请求 IP（仅管理员可见）
   ip_address?: string | null
 
+  // 用户输入内容摘要（仅管理员可见）
+  input_content?: string | null
+
   // 最小账号信息（仅管理员接口返回）
   account?: UsageLogAccountSummary
 }
@@ -1242,6 +1246,7 @@ export interface UserUsageTrendPoint {
 export interface UserSpendingRankingItem {
   user_id: number
   email: string
+  username: string
   actual_cost: number
   requests: number
   tokens: number

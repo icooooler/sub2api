@@ -40,6 +40,7 @@ func NewAuthHandler(cfg *config.Config, authService *service.AuthService, userSe
 
 // RegisterRequest represents the registration request payload
 type RegisterRequest struct {
+	Username       string `json:"username" binding:"required,min=1,max=50"`
 	Email          string `json:"email" binding:"required,email"`
 	Password       string `json:"password" binding:"required,min=6"`
 	VerifyCode     string `json:"verify_code"`
@@ -119,7 +120,7 @@ func (h *AuthHandler) Register(c *gin.Context) {
 		return
 	}
 
-	_, user, err := h.authService.RegisterWithVerification(c.Request.Context(), req.Email, req.Password, req.VerifyCode, req.PromoCode, req.InvitationCode)
+	_, user, err := h.authService.RegisterWithVerification(c.Request.Context(), req.Username, req.Email, req.Password, req.VerifyCode, req.PromoCode, req.InvitationCode)
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return

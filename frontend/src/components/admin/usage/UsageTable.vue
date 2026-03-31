@@ -5,12 +5,12 @@
         <template #cell-user="{ row }">
           <div class="text-sm">
             <button
-              v-if="row.user?.email"
+              v-if="row.user?.username || row.user?.email"
               class="font-medium text-primary-600 underline decoration-dashed underline-offset-2 transition-colors hover:text-primary-700 dark:text-primary-400 dark:hover:text-primary-300"
               @click="$emit('userClick', row.user_id, row.user?.email)"
               :title="t('admin.usage.clickToViewBalance')"
             >
-              {{ row.user.email }}
+              {{ row.user?.username || row.user?.email }}
             </button>
             <span v-else class="font-medium text-gray-900 dark:text-white">-</span>
             <span class="ml-1 text-gray-500 dark:text-gray-400">#{{ row.user_id }}</span>
@@ -153,6 +153,11 @@
 
         <template #cell-user_agent="{ row }">
           <span v-if="row.user_agent" class="text-sm text-gray-600 dark:text-gray-400 block max-w-[320px] truncate" :title="row.user_agent">{{ formatUserAgent(row.user_agent) }}</span>
+          <span v-else class="text-sm text-gray-400 dark:text-gray-500">-</span>
+        </template>
+
+        <template #cell-input_content="{ row }">
+          <span v-if="row.input_content" class="text-sm text-gray-600 dark:text-gray-400 block max-w-[320px] truncate" :title="row.input_content">{{ row.input_content }}</span>
           <span v-else class="text-sm text-gray-400 dark:text-gray-500">-</span>
         </template>
 

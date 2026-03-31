@@ -148,6 +148,42 @@ func TestUsageLogFromService_FallsBackToLegacyModelWhenRequestedModelMissing(t *
 	require.Equal(t, "claude-3", adminDTO.Model)
 }
 
+func TestUsageLogFromServiceAdmin_IncludesInputContent(t *testing.T) {
+	t.Parallel()
+
+	inputContent := "hello world"
+	log := &service.UsageLog{
+		RequestID:    "req_input",
+		Model:        "gpt-5",
+		InputContent: &inputContent,
+	}
+
+	userDTO := UsageLogFromService(log)
+	adminDTO := UsageLogFromServiceAdmin(log)
+
+	userJSON, err := json.Marshal(userDTO)
+	require.NoError(t, err)
+	require.NotContains(t, string(userJSON), "input_content")
+
+	adminJSON, err := json.Marshal(adminDTO)
+	require.NoError(t, err)
+	require.Contains(t, string(adminJSON), `"input_content":"hello world"`)
+}
+
+func TestUsageLogFromServiceAdmin_AlwaysIncludesInputContentField(t *testing.T) {
+	t.Parallel()
+
+	log := &service.UsageLog{
+		RequestID: "req_input_nil",
+		Model:     "gpt-5",
+	}
+
+	adminDTO := UsageLogFromServiceAdmin(log)
+	adminJSON, err := json.Marshal(adminDTO)
+	require.NoError(t, err)
+	require.Contains(t, string(adminJSON), `"input_content":null`)
+}
+
 func f64Ptr(value float64) *float64 {
 	return &value
 }

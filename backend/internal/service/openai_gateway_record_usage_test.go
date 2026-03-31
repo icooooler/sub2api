@@ -182,6 +182,30 @@ func max(a, b int) int {
 	return b
 }
 
+func TestOpenAIGatewayServiceRecordUsage_PassesInputContentToUsageLog(t *testing.T) {
+	usageRepo := &openAIRecordUsageLogRepoStub{inserted: true}
+	svc := newOpenAIRecordUsageServiceForTest(usageRepo, &openAIRecordUsageUserRepoStub{}, &openAIRecordUsageSubRepoStub{}, nil)
+	inputContent := "hello from responses"
+
+	err := svc.RecordUsage(context.Background(), &OpenAIRecordUsageInput{
+		Result: &OpenAIForwardResult{
+			RequestID: "resp_input_content",
+			Usage:     OpenAIUsage{InputTokens: 10, OutputTokens: 2},
+			Model:     "gpt-5.1",
+			Duration:  time.Second,
+		},
+		APIKey:       &APIKey{ID: 1001},
+		User:         &User{ID: 2001},
+		Account:      &Account{ID: 3001},
+		InputContent: &inputContent,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, usageRepo.lastLog)
+	require.NotNil(t, usageRepo.lastLog.InputContent)
+	require.Equal(t, inputContent, *usageRepo.lastLog.InputContent)
+}
+
 func TestOpenAIGatewayServiceRecordUsage_UsesUserSpecificGroupRate(t *testing.T) {
 	groupID := int64(11)
 	groupRate := 1.4

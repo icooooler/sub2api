@@ -107,12 +107,12 @@ func NewAuthService(
 }
 
 // Register 用户注册，返回token和用户
-func (s *AuthService) Register(ctx context.Context, email, password string) (string, *User, error) {
-	return s.RegisterWithVerification(ctx, email, password, "", "", "")
+func (s *AuthService) Register(ctx context.Context, username, email, password string) (string, *User, error) {
+	return s.RegisterWithVerification(ctx, username, email, password, "", "", "")
 }
 
 // RegisterWithVerification 用户注册（支持邮件验证、优惠码和邀请码），返回token和用户
-func (s *AuthService) RegisterWithVerification(ctx context.Context, email, password, verifyCode, promoCode, invitationCode string) (string, *User, error) {
+func (s *AuthService) RegisterWithVerification(ctx context.Context, username, email, password, verifyCode, promoCode, invitationCode string) (string, *User, error) {
 	// 检查是否开放注册（默认关闭：settingService 未配置时不允许注册）
 	if s.settingService == nil || !s.settingService.IsRegistrationEnabled(ctx) {
 		return "", nil, ErrRegDisabled
@@ -190,6 +190,7 @@ func (s *AuthService) RegisterWithVerification(ctx context.Context, email, passw
 	// 创建用户
 	user := &User{
 		Email:        email,
+		Username:     username,
 		PasswordHash: hashedPassword,
 		Role:         RoleUser,
 		Balance:      defaultBalance,

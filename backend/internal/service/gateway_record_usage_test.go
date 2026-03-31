@@ -75,6 +75,33 @@ func (s *openAIRecordUsageBestEffortLogRepoStub) Create(ctx context.Context, log
 	return false, s.createErr
 }
 
+func TestGatewayServiceRecordUsage_PassesInputContentToUsageLog(t *testing.T) {
+	usageRepo := &openAIRecordUsageLogRepoStub{inserted: true}
+	svc := newGatewayRecordUsageServiceForTest(usageRepo, &openAIRecordUsageUserRepoStub{}, &openAIRecordUsageSubRepoStub{})
+	inputContent := "hello from messages"
+
+	err := svc.RecordUsage(context.Background(), &RecordUsageInput{
+		Result: &ForwardResult{
+			RequestID: "gateway_input_content",
+			Usage: ClaudeUsage{
+				InputTokens:  10,
+				OutputTokens: 6,
+			},
+			Model:    "claude-sonnet-4",
+			Duration: time.Second,
+		},
+		APIKey:       &APIKey{ID: 501, Quota: 100},
+		User:         &User{ID: 601},
+		Account:      &Account{ID: 701},
+		InputContent: &inputContent,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, usageRepo.lastLog)
+	require.NotNil(t, usageRepo.lastLog.InputContent)
+	require.Equal(t, inputContent, *usageRepo.lastLog.InputContent)
+}
+
 func TestGatewayServiceRecordUsage_BillingUsesDetachedContext(t *testing.T) {
 	usageRepo := &openAIRecordUsageLogRepoStub{inserted: false, err: context.DeadlineExceeded}
 	userRepo := &openAIRecordUsageUserRepoStub{}

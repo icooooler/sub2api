@@ -604,6 +604,7 @@ func UsageLogFromServiceAdmin(l *service.UsageLog) *AdminUsageLog {
 		UpstreamModel:         l.UpstreamModel,
 		AccountRateMultiplier: l.AccountRateMultiplier,
 		IPAddress:             l.IPAddress,
+		InputContent:          l.InputContent,
 		Account:               AccountSummaryFromService(l.Account),
 	}
 }

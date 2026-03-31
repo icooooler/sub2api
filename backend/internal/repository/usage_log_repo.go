@@ -28,7 +28,7 @@ import (
 	gocache "github.com/patrickmn/go-cache"
 )
 
-const usageLogSelectColumns = "id, user_id, api_key_id, account_id, request_id, model, requested_model, upstream_model, group_id, subscription_id, input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, cache_creation_5m_tokens, cache_creation_1h_tokens, input_cost, output_cost, cache_creation_cost, cache_read_cost, total_cost, actual_cost, rate_multiplier, account_rate_multiplier, billing_type, request_type, stream, openai_ws_mode, duration_ms, first_token_ms, user_agent, ip_address, image_count, image_size, media_type, service_tier, reasoning_effort, inbound_endpoint, upstream_endpoint, cache_ttl_overridden, created_at"
+const usageLogSelectColumns = "id, user_id, api_key_id, account_id, request_id, model, requested_model, upstream_model, group_id, subscription_id, input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, cache_creation_5m_tokens, cache_creation_1h_tokens, input_cost, output_cost, cache_creation_cost, cache_read_cost, total_cost, actual_cost, rate_multiplier, account_rate_multiplier, billing_type, request_type, stream, openai_ws_mode, duration_ms, first_token_ms, user_agent, ip_address, input_content, image_count, image_size, media_type, service_tier, reasoning_effort, inbound_endpoint, upstream_endpoint, cache_ttl_overridden, created_at"
 
 // usageLogInsertArgTypes must stay in the same order as:
 //  1. prepareUsageLogInsert().args
@@ -69,6 +69,7 @@ var usageLogInsertArgTypes = [...]string{
 	"integer",     // first_token_ms
 	"text",        // user_agent
 	"text",        // ip_address
+	"text",        // input_content
 	"integer",     // image_count
 	"text",        // image_size
 	"text",        // media_type
@@ -342,6 +343,7 @@ func (r *usageLogRepository) createSingle(ctx context.Context, sqlq sqlExecutor,
 			first_token_ms,
 			user_agent,
 			ip_address,
+			input_content,
 			image_count,
 			image_size,
 			media_type,
@@ -357,9 +359,11 @@ func (r *usageLogRepository) createSingle(ctx context.Context, sqlq sqlExecutor,
 			$10, $11, $12, $13,
 			$14, $15,
 			$16, $17, $18, $19, $20, $21,
-			$22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40
+			$22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41
 		)
-		ON CONFLICT (request_id, api_key_id) DO NOTHING
+		ON CONFLICT (request_id, api_key_id) DO UPDATE
+		SET input_content = COALESCE(usage_logs.input_content, EXCLUDED.input_content)
+		WHERE usage_logs.input_content IS NULL AND EXCLUDED.input_content IS NOT NULL
 		RETURNING id, created_at
 	`
 
@@ -774,6 +778,7 @@ func buildUsageLogBatchInsertQuery(keys []string, preparedByKey map[string]usage
 			first_token_ms,
 			user_agent,
 			ip_address,
+			input_content,
 			image_count,
 			image_size,
 			media_type,
@@ -897,7 +902,9 @@ func buildUsageLogBatchInsertQuery(keys []string, preparedByKey map[string]usage
 				cache_ttl_overridden,
 				created_at
 			FROM input
-			ON CONFLICT (request_id, api_key_id) DO NOTHING
+			ON CONFLICT (request_id, api_key_id) DO UPDATE
+		SET input_content = COALESCE(usage_logs.input_content, EXCLUDED.input_content)
+		WHERE usage_logs.input_content IS NULL AND EXCLUDED.input_content IS NOT NULL
 			RETURNING request_id, api_key_id, id, created_at
 		),
 		resolved AS (
@@ -969,6 +976,7 @@ func buildUsageLogBestEffortInsertQuery(preparedList []usageLogInsertPrepared) (
 			first_token_ms,
 			user_agent,
 			ip_address,
+			input_content,
 			image_count,
 			image_size,
 			media_type,
@@ -1037,6 +1045,7 @@ func buildUsageLogBestEffortInsertQuery(preparedList []usageLogInsertPrepared) (
 			first_token_ms,
 			user_agent,
 			ip_address,
+			input_content,
 			image_count,
 			image_size,
 			media_type,
@@ -1079,6 +1088,7 @@ func buildUsageLogBestEffortInsertQuery(preparedList []usageLogInsertPrepared) (
 			first_token_ms,
 			user_agent,
 			ip_address,
+			input_content,
 			image_count,
 			image_size,
 			media_type,
@@ -1089,7 +1099,9 @@ func buildUsageLogBestEffortInsertQuery(preparedList []usageLogInsertPrepared) (
 			cache_ttl_overridden,
 			created_at
 		FROM input
-		ON CONFLICT (request_id, api_key_id) DO NOTHING
+		ON CONFLICT (request_id, api_key_id) DO UPDATE
+		SET input_content = COALESCE(usage_logs.input_content, EXCLUDED.input_content)
+		WHERE usage_logs.input_content IS NULL AND EXCLUDED.input_content IS NOT NULL
 	`)
 
 	return query.String(), args
@@ -1129,6 +1141,7 @@ func execUsageLogInsertNoResult(ctx context.Context, sqlq sqlExecutor, prepared 
 			first_token_ms,
 			user_agent,
 			ip_address,
+			input_content,
 			image_count,
 			image_size,
 			media_type,
@@ -1144,9 +1157,11 @@ func execUsageLogInsertNoResult(ctx context.Context, sqlq sqlExecutor, prepared 
 			$10, $11, $12, $13,
 			$14, $15,
 			$16, $17, $18, $19, $20, $21,
-			$22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40
+			$22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41
 		)
-		ON CONFLICT (request_id, api_key_id) DO NOTHING
+		ON CONFLICT (request_id, api_key_id) DO UPDATE
+		SET input_content = COALESCE(usage_logs.input_content, EXCLUDED.input_content)
+		WHERE usage_logs.input_content IS NULL AND EXCLUDED.input_content IS NOT NULL
 	`, prepared.args...)
 	return err
 }
@@ -1170,6 +1185,7 @@ func prepareUsageLogInsert(log *service.UsageLog) usageLogInsertPrepared {
 	firstToken := nullInt(log.FirstTokenMs)
 	userAgent := nullString(log.UserAgent)
 	ipAddress := nullString(log.IPAddress)
+	inputContent := nullString(log.InputContent)
 	imageSize := nullString(log.ImageSize)
 	mediaType := nullString(log.MediaType)
 	serviceTier := nullString(log.ServiceTier)
@@ -1224,6 +1240,7 @@ func prepareUsageLogInsert(log *service.UsageLog) usageLogInsertPrepared {
 			firstToken,
 			userAgent,
 			ipAddress,
+			inputContent,
 			log.ImageCount,
 			imageSize,
 			mediaType,
@@ -2208,18 +2225,20 @@ func (r *usageLogRepository) GetUserSpendingRanking(ctx context.Context, startTi
 			SELECT
 				u.user_id,
 				COALESCE(us.email, '') as email,
+				COALESCE(us.username, '') as username,
 				COALESCE(SUM(u.actual_cost), 0) as actual_cost,
 				COUNT(*) as requests,
 				COALESCE(SUM(u.input_tokens + u.output_tokens + u.cache_creation_tokens + u.cache_read_tokens), 0) as tokens
 			FROM usage_logs u
 			LEFT JOIN users us ON u.user_id = us.id
 			WHERE u.created_at >= $1 AND u.created_at < $2
-			GROUP BY u.user_id, us.email
+			GROUP BY u.user_id, us.email, us.username
 		),
 		ranked AS (
 			SELECT
 				user_id,
 				email,
+				username,
 				actual_cost,
 				requests,
 				tokens,
@@ -2233,6 +2252,7 @@ func (r *usageLogRepository) GetUserSpendingRanking(ctx context.Context, startTi
 		SELECT
 			user_id,
 			email,
+			username,
 			actual_cost,
 			requests,
 			tokens,
@@ -2260,7 +2280,7 @@ func (r *usageLogRepository) GetUserSpendingRanking(ctx context.Context, startTi
 	totalTokens := int64(0)
 	for rows.Next() {
 		var row UserSpendingRankingItem
-		if err = rows.Scan(&row.UserID, &row.Email, &row.ActualCost, &row.Requests, &row.Tokens, &totalActualCost, &totalRequests, &totalTokens); err != nil {
+		if err = rows.Scan(&row.UserID, &row.Email, &row.Username, &row.ActualCost, &row.Requests, &row.Tokens, &totalActualCost, &totalRequests, &totalTokens); err != nil {
 			return nil, err
 		}
 		ranking = append(ranking, row)
@@ -3951,6 +3971,7 @@ func scanUsageLog(scanner interface{ Scan(...any) error }) (*service.UsageLog, e
 		firstTokenMs          sql.NullInt64
 		userAgent             sql.NullString
 		ipAddress             sql.NullString
+		inputContent          sql.NullString
 		imageCount            int
 		imageSize             sql.NullString
 		mediaType             sql.NullString
@@ -3995,6 +4016,7 @@ func scanUsageLog(scanner interface{ Scan(...any) error }) (*service.UsageLog, e
 		&firstTokenMs,
 		&userAgent,
 		&ipAddress,
+		&inputContent,
 		&imageCount,
 		&imageSize,
 		&mediaType,
@@ -4065,6 +4087,9 @@ func scanUsageLog(scanner interface{ Scan(...any) error }) (*service.UsageLog, e
 	}
 	if ipAddress.Valid {
 		log.IPAddress = &ipAddress.String
+	}
+	if inputContent.Valid {
+		log.InputContent = &inputContent.String
 	}
 	if imageSize.Valid {
 		log.ImageSize = &imageSize.String

@@ -4106,8 +4106,9 @@ type OpenAIRecordUsageInput struct {
 	Subscription       *UserSubscription
 	InboundEndpoint    string
 	UpstreamEndpoint   string
-	UserAgent          string // 请求的 User-Agent
-	IPAddress          string // 请求的客户端 IP 地址
+	UserAgent          string  // 请求的 User-Agent
+	IPAddress          string  // 请求的客户端 IP 地址
+	InputContent       *string // 用户输入内容摘要
 	RequestPayloadHash string
 	APIKeyService      APIKeyQuotaUpdater
 }
@@ -4179,6 +4180,7 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 		AccountID:             account.ID,
 		RequestID:             requestID,
 		Model:                 result.Model,
+		InputContent:          input.InputContent,
 		RequestedModel:        result.Model,
 		UpstreamModel:         optionalNonEqualStringPtr(result.UpstreamModel, result.Model),
 		ServiceTier:           result.ServiceTier,

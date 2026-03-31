@@ -31,6 +31,32 @@
 
       <!-- Registration Form -->
       <form v-else @submit.prevent="handleRegister" class="space-y-5">
+        <!-- Username Input -->
+        <div>
+          <label for="username" class="input-label">
+            {{ t('auth.usernameLabel') }}
+          </label>
+          <div class="relative">
+            <div class="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3.5">
+              <Icon name="user" size="md" class="text-gray-400 dark:text-dark-500" />
+            </div>
+            <input
+              id="username"
+              v-model="formData.username"
+              type="text"
+              required
+              autocomplete="username"
+              :disabled="isLoading"
+              class="input pl-11"
+              :class="{ 'input-error': errors.username }"
+              :placeholder="t('auth.usernamePlaceholder')"
+            />
+          </div>
+          <p v-if="errors.username" class="input-error-text">
+            {{ errors.username }}
+          </p>
+        </div>
+
         <!-- Email Input -->
         <div>
           <label for="email" class="input-label">
@@ -350,6 +376,7 @@ const invitationValidation = reactive({
 let invitationValidateTimeout: ReturnType<typeof setTimeout> | null = null
 
 const formData = reactive({
+  username: '',
   email: '',
   password: '',
   promo_code: '',
@@ -357,6 +384,7 @@ const formData = reactive({
 })
 
 const errors = reactive({
+  username: '',
   email: '',
   password: '',
   turnstile: '',
@@ -581,12 +609,19 @@ function buildEmailSuffixNotAllowedMessage(): string {
 
 function validateForm(): boolean {
   // Reset errors
+  errors.username = ''
   errors.email = ''
   errors.password = ''
   errors.turnstile = ''
   errors.invitation_code = ''
 
   let isValid = true
+
+  // Username validation
+  if (!formData.username.trim()) {
+    errors.username = t('auth.usernameRequired')
+    isValid = false
+  }
 
   // Email validation
   if (!formData.email.trim()) {
@@ -686,6 +721,7 @@ async function handleRegister(): Promise<void> {
       sessionStorage.setItem(
         'register_data',
         JSON.stringify({
+          username: formData.username.trim(),
           email: formData.email,
           password: formData.password,
           turnstile_token: turnstileToken.value,
@@ -701,6 +737,7 @@ async function handleRegister(): Promise<void> {
 
     // Otherwise, directly register
     await authStore.register({
+      username: formData.username.trim(),
       email: formData.email,
       password: formData.password,
       turnstile_token: turnstileEnabled.value ? turnstileToken.value : undefined,

@@ -363,6 +363,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		// 捕获请求信息（用于异步记录，避免在 goroutine 中访问 gin.Context）
 		userAgent := c.GetHeader("User-Agent")
 		clientIP := ip.GetClientIP(c)
+		inputContent := service.ExtractUserInputContent(body, 500)
 		requestPayloadHash := service.HashUsageRequestPayload(body)
 
 		// 使用量记录通过有界 worker 池提交，避免请求热路径创建无界 goroutine。
@@ -377,6 +378,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 				UpstreamEndpoint:   GetUpstreamEndpoint(c, account.Platform),
 				UserAgent:          userAgent,
 				IPAddress:          clientIP,
+				InputContent:       inputContent,
 				RequestPayloadHash: requestPayloadHash,
 				APIKeyService:      h.apiKeyService,
 			}); err != nil {
@@ -744,6 +746,7 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 
 		userAgent := c.GetHeader("User-Agent")
 		clientIP := ip.GetClientIP(c)
+		inputContent := service.ExtractUserInputContent(body, 500)
 		requestPayloadHash := service.HashUsageRequestPayload(body)
 
 		h.submitUsageRecordTask(func(ctx context.Context) {
@@ -757,6 +760,7 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 				UpstreamEndpoint:   GetUpstreamEndpoint(c, account.Platform),
 				UserAgent:          userAgent,
 				IPAddress:          clientIP,
+				InputContent:       inputContent,
 				RequestPayloadHash: requestPayloadHash,
 				APIKeyService:      h.apiKeyService,
 			}); err != nil {
@@ -1257,6 +1261,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 					UpstreamEndpoint:   GetUpstreamEndpoint(c, account.Platform),
 					UserAgent:          userAgent,
 					IPAddress:          clientIP,
+					InputContent:       service.ExtractUserInputContent(firstMessage, 500),
 					RequestPayloadHash: service.HashUsageRequestPayload(firstMessage),
 					APIKeyService:      h.apiKeyService,
 				}); err != nil {

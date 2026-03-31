@@ -144,6 +144,7 @@ type UsageLog struct {
 	FirstTokenMs *int
 	UserAgent    *string
 	IPAddress    *string
+	InputContent *string
 
 	// Cache TTL Override 标记（管理员强制替换了缓存 TTL 计费）
 	CacheTTLOverridden bool
