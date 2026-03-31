@@ -580,6 +580,8 @@ export default {
     groupChangedSuccess: 'Group changed successfully',
     failedToChangeGroup: 'Failed to change group',
     groupRequired: 'Please select a group',
+    autoRoute: 'Auto Route',
+    autoRouteDescription: 'Automatically routes to the matching group based on the requested model',
     usage: 'Usage',
     today: 'Today',
     total: 'Last 30d',

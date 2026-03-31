@@ -105,9 +105,9 @@
                   :rate-multiplier="row.group.rate_multiplier"
                   :user-rate-multiplier="userGroupRates[row.group.id]"
                 />
-                <span v-else class="text-sm text-gray-400 dark:text-dark-500">{{
-                  t('keys.noGroup')
-                }}</span>
+                <span v-else class="inline-flex items-center gap-1 rounded-full bg-indigo-50 px-2 py-0.5 text-xs font-medium text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300">
+                  {{ t('keys.autoRoute') }}
+                </span>
                 <span class="text-xs text-gray-500 dark:text-gray-400">{{ t('keys.selectGroup') }}</span>
                 <svg
                   class="h-3.5 w-3.5 text-gray-400 opacity-60 transition-opacity group-hover/dropdown:opacity-100"
@@ -410,8 +410,8 @@
               <GroupBadge
                 v-if="option"
                 :name="(option as unknown as GroupOption).label"
-                :platform="(option as unknown as GroupOption).platform"
-                :subscription-type="(option as unknown as GroupOption).subscriptionType"
+                :platform="(option as unknown as GroupOption).platform as any"
+                :subscription-type="(option as unknown as GroupOption).subscriptionType as any"
                 :rate-multiplier="(option as unknown as GroupOption).rate"
                 :user-rate-multiplier="(option as unknown as GroupOption).userRate"
               />
@@ -420,8 +420,8 @@
             <template #option="{ option, selected }">
               <GroupOptionItem
                 :name="(option as unknown as GroupOption).label"
-                :platform="(option as unknown as GroupOption).platform"
-                :subscription-type="(option as unknown as GroupOption).subscriptionType"
+                :platform="(option as unknown as GroupOption).platform as any"
+                :subscription-type="(option as unknown as GroupOption).subscriptionType as any"
                 :rate-multiplier="(option as unknown as GroupOption).rate"
                 :user-rate-multiplier="(option as unknown as GroupOption).userRate"
                 :description="(option as unknown as GroupOption).description"
@@ -1015,8 +1015,8 @@
           >
             <GroupOptionItem
               :name="option.label"
-              :platform="option.platform"
-              :subscription-type="option.subscriptionType"
+              :platform="option.platform as any"
+              :subscription-type="option.subscriptionType as any"
               :rate-multiplier="option.rate"
               :user-rate-multiplier="option.userRate"
               :description="option.description"
@@ -1073,13 +1073,13 @@ const formatDateTimeLocal = (isoDate: string): string => {
 }
 
 interface GroupOption {
-  value: number
+  value: number | null
   label: string
   description: string | null
   rate: number
   userRate: number | null
-  subscriptionType: SubscriptionType
-  platform: GroupPlatform
+  subscriptionType: SubscriptionType | 'standard'
+  platform: GroupPlatform | 'auto'
 }
 
 const appStore = useAppStore()
@@ -1225,8 +1225,17 @@ const onStatusFilterChange = (value: string | number | boolean | null) => {
 }
 
 // Convert groups to Select options format with rate multiplier and subscription type
-const groupOptions = computed(() =>
-  groups.value.map((group) => ({
+const groupOptions = computed(() => [
+  {
+    value: null,
+    label: t('keys.autoRoute'),
+    description: t('keys.autoRouteDescription'),
+    rate: 0,
+    userRate: null,
+    subscriptionType: 'standard',
+    platform: 'auto'
+  },
+  ...groups.value.map((group) => ({
     value: group.id,
     label: group.name,
     description: group.description,
@@ -1235,7 +1244,7 @@ const groupOptions = computed(() =>
     subscriptionType: group.subscription_type,
     platform: group.platform
   }))
-)
+])
 
 // Group dropdown search
 const groupSearchQuery = ref('')
@@ -1459,12 +1468,6 @@ const confirmDelete = (key: ApiKey) => {
 }
 
 const handleSubmit = async () => {
-  // Validate group_id is required
-  if (formData.value.group_id === null) {
-    appStore.showError(t('keys.groupRequired'))
-    return
-  }
-
   // Validate custom key if enabled
   if (!showEditModal.value && formData.value.use_custom_key) {
     if (!formData.value.custom_key) {

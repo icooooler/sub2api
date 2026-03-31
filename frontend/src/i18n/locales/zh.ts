@@ -580,6 +580,8 @@ export default {
     groupChangedSuccess: '分组更换成功',
     failedToChangeGroup: '更换分组失败',
     groupRequired: '请选择分组',
+    autoRoute: '自动路由',
+    autoRouteDescription: '根据请求的模型自动路由到对应分组',
     usage: '用量',
     today: '今日',
     total: '近30天',
