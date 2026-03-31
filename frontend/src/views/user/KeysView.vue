@@ -918,11 +918,10 @@
       :api-key="selectedKey?.key || ''"
       :base-url="publicSettings?.api_base_url || ''"
       :platform="selectedKey?.group?.platform || null"
-      :allow-messages-dispatch="selectedKey?.group?.allow_messages_dispatch || false"
+      :allow-messages-dispatch="!selectedKey?.group_id || selectedKey?.group?.allow_messages_dispatch || false"
       @close="closeUseKeyModal"
     />
 
-    <!-- CCS Client Selection Dialog for Antigravity -->
     <BaseDialog
       :show="showCcsClientSelect"
       :title="t('keys.ccsClientSelect.title')"
@@ -932,34 +931,26 @@
       <div class="space-y-4">
         <p class="text-sm text-gray-600 dark:text-gray-400">
           {{ t('keys.ccsClientSelect.description') }}
-	        </p>
-	        <div class="grid grid-cols-2 gap-3">
-	          <button
-	            @click="handleCcsClientSelect('claude')"
-	            class="flex flex-col items-center gap-2 p-4 rounded-xl border-2 border-gray-200 dark:border-dark-600 hover:border-primary-500 dark:hover:border-primary-500 hover:bg-primary-50 dark:hover:bg-primary-900/20 transition-all"
-	          >
-	            <Icon name="terminal" size="xl" class="text-gray-600 dark:text-gray-400" />
-	            <span class="font-medium text-gray-900 dark:text-white">{{
-	              t('keys.ccsClientSelect.claudeCode')
-	            }}</span>
-	            <span class="text-xs text-gray-500 dark:text-gray-400">{{
-	              t('keys.ccsClientSelect.claudeCodeDesc')
-	            }}</span>
-	          </button>
-	          <button
-	            @click="handleCcsClientSelect('gemini')"
-	            class="flex flex-col items-center gap-2 p-4 rounded-xl border-2 border-gray-200 dark:border-dark-600 hover:border-primary-500 dark:hover:border-primary-500 hover:bg-primary-50 dark:hover:bg-primary-900/20 transition-all"
-	          >
-	            <Icon name="sparkles" size="xl" class="text-gray-600 dark:text-gray-400" />
-	            <span class="font-medium text-gray-900 dark:text-white">{{
-	              t('keys.ccsClientSelect.geminiCli')
-	            }}</span>
-	            <span class="text-xs text-gray-500 dark:text-gray-400">{{
-	              t('keys.ccsClientSelect.geminiCliDesc')
-	            }}</span>
-	          </button>
-	        </div>
-	      </div>
+        </p>
+        <div class="grid grid-cols-2 gap-3">
+          <button
+            @click="handleCcsClientSelect('claude')"
+            class="flex flex-col items-center gap-2 rounded-xl border-2 border-gray-200 p-4 transition-all hover:border-primary-500 hover:bg-primary-50 dark:border-dark-600 dark:hover:border-primary-500 dark:hover:bg-primary-900/20"
+          >
+            <Icon name="terminal" size="xl" class="text-gray-600 dark:text-gray-400" />
+            <span class="font-medium text-gray-900 dark:text-white">{{ t('keys.ccsClientSelect.claudeCode') }}</span>
+            <span class="text-xs text-gray-500 dark:text-gray-400">{{ t('keys.ccsClientSelect.claudeCodeDesc') }}</span>
+          </button>
+          <button
+            @click="handleCcsClientSelect('codex')"
+            class="flex flex-col items-center gap-2 rounded-xl border-2 border-gray-200 p-4 transition-all hover:border-primary-500 hover:bg-primary-50 dark:border-dark-600 dark:hover:border-primary-500 dark:hover:bg-primary-900/20"
+          >
+            <Icon name="terminal" size="xl" class="text-gray-600 dark:text-gray-400" />
+            <span class="font-medium text-gray-900 dark:text-white">{{ t('keys.ccsClientSelect.codexCli') }}</span>
+            <span class="text-xs text-gray-500 dark:text-gray-400">{{ t('keys.ccsClientSelect.codexCliDesc') }}</span>
+          </button>
+        </div>
+      </div>
       <template #footer>
         <div class="flex justify-end">
           <button @click="closeCcsClientSelect" class="btn btn-secondary">
@@ -1230,7 +1221,7 @@ const groupOptions = computed(() => [
     value: null,
     label: t('keys.autoRoute'),
     description: t('keys.autoRouteDescription'),
-    rate: 0,
+    rate: 1,
     userRate: null,
     subscriptionType: 'standard',
     platform: 'auto'
@@ -1667,31 +1658,47 @@ const resetRateLimitUsage = async () => {
 }
 
 const importToCcswitch = (row: ApiKey) => {
-  const platform = row.group?.platform || 'anthropic'
+  const platform = row.group?.platform || null
 
-  // For antigravity platform, show client selection dialog
-  if (platform === 'antigravity') {
+  if (platform === 'antigravity' || platform === null) {
     pendingCcsRow.value = row
     showCcsClientSelect.value = true
     return
   }
 
-  // For other platforms, execute directly
-  executeCcsImport(row, platform === 'gemini' ? 'gemini' : 'claude')
+  executeCcsImport(row, platform === 'gemini' ? 'gemini' : platform === 'openai' ? 'codex' : 'claude')
 }
 
-const executeCcsImport = (row: ApiKey, clientType: 'claude' | 'gemini') => {
+const executeCcsImport = (row: ApiKey, clientType: 'claude' | 'gemini' | 'codex') => {
   const baseUrl = publicSettings.value?.api_base_url || window.location.origin
-  const platform = row.group?.platform || 'anthropic'
+  const platform = row.group?.platform || null
 
   // Determine app name and endpoint based on platform and client type
   let app: string
   let endpoint: string
 
   if (platform === 'antigravity') {
-    // Antigravity always uses /antigravity suffix
-    app = clientType === 'gemini' ? 'gemini' : 'claude'
-    endpoint = `${baseUrl}/antigravity`
+    if (clientType === 'codex') {
+      app = 'codex'
+      endpoint = baseUrl
+    } else {
+      app = clientType === 'gemini' ? 'gemini' : 'claude'
+      endpoint = `${baseUrl}/antigravity`
+    }
+  } else if (platform === null) {
+    switch (clientType) {
+      case 'codex':
+        app = 'codex'
+        endpoint = baseUrl
+        break
+      case 'gemini':
+        app = 'gemini'
+        endpoint = baseUrl
+        break
+      default:
+        app = 'claude'
+        endpoint = baseUrl
+    }
   } else {
     switch (platform) {
       case 'openai':
@@ -1728,10 +1735,10 @@ const executeCcsImport = (row: ApiKey, clientType: 'claude' | 'gemini') => {
 
   const params = new URLSearchParams({
     resource: 'provider',
-    app: app,
+    app,
     name: providerName,
     homepage: baseUrl,
-    endpoint: endpoint,
+    endpoint,
     apiKey: row.key,
     configFormat: 'json',
     usageEnabled: 'true',
@@ -1755,12 +1762,11 @@ const executeCcsImport = (row: ApiKey, clientType: 'claude' | 'gemini') => {
   }
 }
 
-const handleCcsClientSelect = (clientType: 'claude' | 'gemini') => {
+const handleCcsClientSelect = (clientType: 'claude' | 'codex') => {
   if (pendingCcsRow.value) {
     executeCcsImport(pendingCcsRow.value, clientType)
   }
-  showCcsClientSelect.value = false
-  pendingCcsRow.value = null
+  closeCcsClientSelect()
 }
 
 const closeCcsClientSelect = () => {

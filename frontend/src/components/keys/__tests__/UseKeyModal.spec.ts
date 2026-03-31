@@ -50,4 +50,42 @@ describe('UseKeyModal', () => {
     expect(codeBlock.text()).toContain('"name": "GPT-5.4 Mini"')
     expect(codeBlock.text()).toContain('"name": "GPT-5.4 Nano"')
   })
+
+  it('shows multi-platform tabs for auto-route keys', async () => {
+    const wrapper = mount(UseKeyModal, {
+      props: {
+        show: true,
+        apiKey: 'sk-test',
+        baseUrl: 'https://example.com/v1',
+        platform: null,
+        allowMessagesDispatch: true
+      },
+      global: {
+        stubs: {
+          BaseDialog: {
+            template: '<div><slot /><slot name="footer" /></div>'
+          },
+          Icon: {
+            template: '<span />'
+          }
+        }
+      }
+    })
+
+    const buttons = wrapper.findAll('button')
+    expect(buttons.some((button) => button.text().includes('keys.useKeyModal.cliTabs.claudeCode'))).toBe(true)
+    expect(buttons.some((button) => button.text().includes('keys.useKeyModal.cliTabs.codexCli'))).toBe(true)
+    expect(buttons.some((button) => button.text().includes('keys.useKeyModal.cliTabs.codexCliWs'))).toBe(true)
+    expect(buttons.some((button) => button.text().includes('keys.useKeyModal.cliTabs.geminiCli'))).toBe(true)
+    expect(buttons.some((button) => button.text().includes('keys.useKeyModal.cliTabs.opencode'))).toBe(true)
+
+    expect(wrapper.text()).not.toContain('keys.useKeyModal.noGroupTitle')
+
+    const codexTab = buttons.find((button) => button.text().includes('keys.useKeyModal.cliTabs.codexCli'))
+    expect(codexTab).toBeDefined()
+    await codexTab!.trigger('click')
+    await nextTick()
+
+    expect(wrapper.find('pre code').text()).toContain('model_provider = "OpenAI"')
+  })
 })
