@@ -1,11 +1,17 @@
 package repository
 
 import (
+	"bytes"
+	"compress/flate"
+	"compress/gzip"
 	"io"
 	"net/http"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/andybalholm/brotli"
+	"github.com/klauspost/compress/zstd"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/stretchr/testify/require"
@@ -279,6 +285,128 @@ func (s *HTTPUpstreamSuite) TestIdleTTLDoesNotEvictActive() {
 // TestHTTPUpstreamSuite 运行测试套件
 func TestHTTPUpstreamSuite(t *testing.T) {
 	suite.Run(t, new(HTTPUpstreamSuite))
+}
+
+func TestDecompressResponseBody_Gzip(t *testing.T) {
+	t.Parallel()
+
+	resp := buildCompressedResponse(t, "gzip", []byte("hello gzip"))
+
+	decompressResponseBody(resp)
+
+	assertDecompressedResponse(t, resp, "hello gzip")
+}
+
+func TestDecompressResponseBody_Brotli(t *testing.T) {
+	t.Parallel()
+
+	resp := buildCompressedResponse(t, "br", []byte("hello brotli"))
+
+	decompressResponseBody(resp)
+
+	assertDecompressedResponse(t, resp, "hello brotli")
+}
+
+func TestDecompressResponseBody_Deflate(t *testing.T) {
+	t.Parallel()
+
+	resp := buildCompressedResponse(t, "deflate", []byte("hello deflate"))
+
+	decompressResponseBody(resp)
+
+	assertDecompressedResponse(t, resp, "hello deflate")
+}
+
+func TestDecompressResponseBody_Zstd(t *testing.T) {
+	t.Parallel()
+
+	resp := buildCompressedResponse(t, "zstd", []byte("hello zstd"))
+
+	decompressResponseBody(resp)
+
+	assertDecompressedResponse(t, resp, "hello zstd")
+}
+
+func TestDecompressResponseBody_UnsupportedEncodingKeepsHeaders(t *testing.T) {
+	t.Parallel()
+
+	resp := &http.Response{
+		Header: make(http.Header),
+		Body:   io.NopCloser(bytes.NewReader([]byte("unchanged"))),
+	}
+	resp.Header.Set("Content-Encoding", "compress")
+	resp.Header.Set("Content-Length", "9")
+	resp.ContentLength = 9
+
+	decompressResponseBody(resp)
+
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	require.Equal(t, "unchanged", string(body))
+	require.Equal(t, "compress", resp.Header.Get("Content-Encoding"))
+	require.Equal(t, "9", resp.Header.Get("Content-Length"))
+	require.EqualValues(t, 9, resp.ContentLength)
+}
+
+func buildCompressedResponse(t *testing.T, encoding string, payload []byte) *http.Response {
+	t.Helper()
+
+	compressed := compressPayload(t, encoding, payload)
+	resp := &http.Response{
+		Header: make(http.Header),
+		Body:   io.NopCloser(bytes.NewReader(compressed)),
+	}
+	resp.Header.Set("Content-Encoding", encoding)
+	resp.Header.Set("Content-Length", "999")
+	resp.ContentLength = int64(len(compressed))
+	return resp
+}
+
+func compressPayload(t *testing.T, encoding string, payload []byte) []byte {
+	t.Helper()
+
+	var buf bytes.Buffer
+
+	switch encoding {
+	case "gzip":
+		writer := gzip.NewWriter(&buf)
+		_, err := writer.Write(payload)
+		require.NoError(t, err)
+		require.NoError(t, writer.Close())
+	case "br":
+		writer := brotli.NewWriter(&buf)
+		_, err := writer.Write(payload)
+		require.NoError(t, err)
+		require.NoError(t, writer.Close())
+	case "deflate":
+		writer, err := flate.NewWriter(&buf, flate.DefaultCompression)
+		require.NoError(t, err)
+		_, err = writer.Write(payload)
+		require.NoError(t, err)
+		require.NoError(t, writer.Close())
+	case "zstd":
+		writer, err := zstd.NewWriter(&buf)
+		require.NoError(t, err)
+		_, err = writer.Write(payload)
+		require.NoError(t, err)
+		require.NoError(t, writer.Close())
+	default:
+		t.Fatalf("unsupported encoding for test: %s", encoding)
+	}
+
+	return buf.Bytes()
+}
+
+func assertDecompressedResponse(t *testing.T, resp *http.Response, expected string) {
+	t.Helper()
+
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
+	require.Equal(t, expected, string(body))
+	require.Empty(t, resp.Header.Get("Content-Encoding"))
+	require.Empty(t, resp.Header.Get("Content-Length"))
+	require.EqualValues(t, -1, resp.ContentLength)
 }
 
 // mustGetOrCreateClient 测试辅助函数，调用 getOrCreateClient 并断言无错误
