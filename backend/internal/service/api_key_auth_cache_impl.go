@@ -213,11 +213,12 @@ func (s *APIKeyService) snapshotFromAPIKey(apiKey *APIKey) *APIKeyAuthSnapshot {
 		RateLimit1d: apiKey.RateLimit1d,
 		RateLimit7d: apiKey.RateLimit7d,
 		User: APIKeyAuthUserSnapshot{
-			ID:          apiKey.User.ID,
-			Status:      apiKey.User.Status,
-			Role:        apiKey.User.Role,
-			Balance:     apiKey.User.Balance,
-			Concurrency: apiKey.User.Concurrency,
+			ID:            apiKey.User.ID,
+			Status:        apiKey.User.Status,
+			Role:          apiKey.User.Role,
+			Balance:       apiKey.User.Balance,
+			Concurrency:   apiKey.User.Concurrency,
+			AllowedGroups: apiKey.User.AllowedGroups,
 		},
 	}
 	if apiKey.Group != nil {
@@ -267,11 +268,12 @@ func (s *APIKeyService) snapshotToAPIKey(key string, snapshot *APIKeyAuthSnapsho
 		RateLimit1d: snapshot.RateLimit1d,
 		RateLimit7d: snapshot.RateLimit7d,
 		User: &User{
-			ID:          snapshot.User.ID,
-			Status:      snapshot.User.Status,
-			Role:        snapshot.User.Role,
-			Balance:     snapshot.User.Balance,
-			Concurrency: snapshot.User.Concurrency,
+			ID:            snapshot.User.ID,
+			Status:        snapshot.User.Status,
+			Role:          snapshot.User.Role,
+			Balance:       snapshot.User.Balance,
+			Concurrency:   snapshot.User.Concurrency,
+			AllowedGroups: snapshot.User.AllowedGroups,
 		},
 	}
 	if snapshot.Group != nil {

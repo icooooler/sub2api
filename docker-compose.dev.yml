@@ -1,0 +1,43 @@
+# 本地开发用：只启动 PostgreSQL + Redis
+# 用法: docker compose -f docker-compose.dev.yml up -d
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    container_name: sub2api-dev-postgres
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - dev_postgres_data:/var/lib/postgresql/data
+    environment:
+      - PGDATA=/var/lib/postgresql/data
+      - POSTGRES_USER=sub2api
+      - POSTGRES_PASSWORD=dev123456
+      - POSTGRES_DB=sub2api
+      - TZ=Asia/Shanghai
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sub2api -d sub2api"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  redis:
+    image: redis:8-alpine
+    container_name: sub2api-dev-redis
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - dev_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  dev_postgres_data:
+    driver: local
+  dev_redis_data:
+    driver: local

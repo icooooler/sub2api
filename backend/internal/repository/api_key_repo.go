@@ -11,6 +11,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent/group"
 	"github.com/Wei-Shaw/sub2api/ent/schema/mixins"
 	"github.com/Wei-Shaw/sub2api/ent/user"
+	"github.com/Wei-Shaw/sub2api/ent/userallowedgroup"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
@@ -173,7 +174,24 @@ func (r *apiKeyRepository) GetByKeyForAuth(ctx context.Context, key string) (*se
 		}
 		return nil, err
 	}
-	return apiKeyEntityToService(m), nil
+
+	out := apiKeyEntityToService(m)
+
+	// Load user's AllowedGroups from join table so CanBindGroup() works for exclusive groups.
+	if out.User != nil {
+		rows, err := r.client.UserAllowedGroup.Query().
+			Where(userallowedgroup.UserIDEQ(out.User.ID)).
+			All(ctx)
+		if err == nil && len(rows) > 0 {
+			groups := make([]int64, len(rows))
+			for i, row := range rows {
+				groups[i] = row.GroupID
+			}
+			out.User.AllowedGroups = groups
+		}
+	}
+
+	return out, nil
 }
 
 func (r *apiKeyRepository) Update(ctx context.Context, key *service.APIKey) error {

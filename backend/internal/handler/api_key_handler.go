@@ -3,6 +3,7 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"strconv"
 	"strings"
 	"time"
@@ -46,9 +47,9 @@ type CreateAPIKeyRequest struct {
 
 // UpdateAPIKeyRequest represents the update API key request payload
 type UpdateAPIKeyRequest struct {
-	Name        string   `json:"name"`
-	GroupID     *int64   `json:"group_id"`
-	Status      string   `json:"status" binding:"omitempty,oneof=active inactive"`
+	Name        string           `json:"name"`
+	GroupID     json.RawMessage  `json:"group_id"`  // use RawMessage to distinguish null from absent
+	Status      string           `json:"status" binding:"omitempty,oneof=active inactive"`
 	IPWhitelist []string `json:"ip_whitelist"` // IP 白名单
 	IPBlacklist []string `json:"ip_blacklist"` // IP 黑名单
 	Quota       *float64 `json:"quota"`        // 配额限制 (USD), 0=无限制
@@ -212,7 +213,19 @@ func (h *APIKeyHandler) Update(c *gin.Context) {
 	if req.Name != "" {
 		svcReq.Name = &req.Name
 	}
-	svcReq.GroupID = req.GroupID
+	// Parse group_id: distinguish "absent" (no change) from "null" (clear to auto-route) from number (set group)
+	if req.GroupID != nil {
+		if string(req.GroupID) == "null" {
+			svcReq.ClearGroupID = true
+		} else {
+			var gid int64
+			if err := json.Unmarshal(req.GroupID, &gid); err != nil {
+				response.BadRequest(c, "Invalid group_id")
+				return
+			}
+			svcReq.GroupID = &gid
+		}
+	}
 	if req.Status != "" {
 		svcReq.Status = &req.Status
 	}

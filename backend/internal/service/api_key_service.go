@@ -168,8 +168,9 @@ type CreateAPIKeyRequest struct {
 // UpdateAPIKeyRequest 更新API Key请求
 type UpdateAPIKeyRequest struct {
 	Name        *string  `json:"name"`
-	GroupID     *int64   `json:"group_id"`
-	Status      *string  `json:"status"`
+	GroupID      *int64 `json:"group_id"`
+	ClearGroupID bool   `json:"-"` // Clear group (set to auto-route, internal use)
+	Status       *string `json:"status"`
 	IPWhitelist []string `json:"ip_whitelist"` // IP 白名单（空数组清空）
 	IPBlacklist []string `json:"ip_blacklist"` // IP 黑名单（空数组清空）
 
@@ -541,7 +542,9 @@ func (s *APIKeyService) Update(ctx context.Context, id int64, userID int64, req 
 		apiKey.Name = *req.Name
 	}
 
-	if req.GroupID != nil {
+	if req.ClearGroupID {
+		apiKey.GroupID = nil
+	} else if req.GroupID != nil {
 		// 验证分组权限
 		user, err := s.userRepo.GetByID(ctx, userID)
 		if err != nil {
