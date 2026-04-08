@@ -14,6 +14,10 @@ import (
 	"github.com/tidwall/gjson"
 )
 
+type groupSchedulableAccountLister interface {
+	ListSchedulableByGroupID(ctx context.Context, groupID int64) ([]service.Account, error)
+}
+
 // UngroupedAutoRoute resolves the target group for ungrouped API keys
 // by inspecting the request body's "model" field and matching it to
 // an active group the user has access to.
@@ -27,6 +31,7 @@ import (
 // When the key already has a group, this middleware is a no-op.
 func UngroupedAutoRoute(
 	groupRepo service.GroupRepository,
+	accountRepo groupSchedulableAccountLister,
 	settingService *service.SettingService,
 	writeError GatewayErrorWriter,
 ) gin.HandlerFunc {
@@ -64,14 +69,6 @@ func UngroupedAutoRoute(
 			"model", modelVal,
 			"api_key_id", apiKey.ID)
 
-		// Use model name to infer platform, then query ALL active groups
-		// and sort them so inferred-platform groups come first. This ensures
-		// the primary group matches the correct handler while still allowing
-		// cross-platform fallback for unknown model prefixes.
-		platform := service.InferPlatformFromModel(modelVal)
-		slog.Debug("ungrouped_auto_route",
-			"inferred_platform", platform)
-
 		allGroups, err := groupRepo.ListActive(c.Request.Context())
 		if err != nil {
 			slog.Error("ungrouped_auto_route: failed to query groups", "error", err)
@@ -81,15 +78,15 @@ func UngroupedAutoRoute(
 		}
 
 		candidates := filterCandidateGroups(allGroups, apiKey)
-		sortCandidatesByPlatformPriority(candidates, platform)
+		sortCandidatesForModel(c.Request.Context(), candidates, modelVal, accountRepo)
 
 		slog.Debug("ungrouped_auto_route",
 			"candidate_groups", len(candidates),
-			"platform", platform)
+			"model", modelVal)
 
 		if len(candidates) == 0 {
 			slog.Warn("ungrouped_auto_route: no group resolved",
-				"model", modelVal, "platform", platform, "api_key_id", apiKey.ID)
+				"model", modelVal, "api_key_id", apiKey.ID)
 			writeError(c, http.StatusForbidden,
 				"No available group found for the requested model. Please contact the administrator.")
 			c.Abort()
@@ -145,19 +142,61 @@ func filterCandidateGroups(groups []service.Group, apiKey *service.APIKey) []ser
 	return candidates
 }
 
-// sortCandidatesByPlatformPriority sorts candidates so groups matching the
-// inferred platform come first, preserving original order within each tier.
-// This ensures the primary group picks the correct handler for route dispatch
-// while still exposing other-platform groups as fallback candidates.
-func sortCandidatesByPlatformPriority(candidates []service.Group, inferredPlatform string) {
-	sort.SliceStable(candidates, func(i, j int) bool {
-		iMatch := candidates[i].Platform == inferredPlatform
-		jMatch := candidates[j].Platform == inferredPlatform
-		if iMatch != jMatch {
-			return iMatch
+// sortCandidatesForModel sorts candidates so groups most likely to satisfy the
+// requested model are tried first, while preserving original order within each tier.
+// Priority:
+// 1. exact DefaultMappedModel match
+// 2. any schedulable account in group supports requested model
+// 3. other groups
+func sortCandidatesForModel(ctx context.Context, candidates []service.Group, requestedModel string, accountRepo groupSchedulableAccountLister) {
+	supportByGroupID := make(map[int64]groupSupport, len(candidates))
+	if accountRepo != nil {
+		for _, group := range candidates {
+			supportByGroupID[group.ID] = groupSupport{supportsModel: groupSupportsModel(ctx, accountRepo, group.ID, requestedModel)}
 		}
-		return false // preserve original order within same tier
+	}
+
+	sort.SliceStable(candidates, func(i, j int) bool {
+		iScore := candidatePriority(candidates[i], requestedModel, supportByGroupID[candidates[i].ID])
+		jScore := candidatePriority(candidates[j], requestedModel, supportByGroupID[candidates[j].ID])
+		return iScore < jScore
 	})
+}
+
+func candidatePriority(group service.Group, requestedModel string, support groupSupport) int {
+	if group.DefaultMappedModel == requestedModel {
+		return 0
+	}
+	if support.supportsModel {
+		return 1
+	}
+	return 2
+}
+
+type groupSupport struct {
+	supportsModel bool
+}
+
+func groupSupportsModel(ctx context.Context, accountRepo groupSchedulableAccountLister, groupID int64, requestedModel string) bool {
+	if accountRepo == nil || requestedModel == "" {
+		return false
+	}
+
+	accounts, err := accountRepo.ListSchedulableByGroupID(ctx, groupID)
+	if err != nil {
+		slog.Warn("ungrouped_auto_route: failed to query schedulable accounts",
+			"group_id", groupID,
+			"model", requestedModel,
+			"error", err)
+		return false
+	}
+
+	for i := range accounts {
+		if accounts[i].IsModelSupported(requestedModel) {
+			return true
+		}
+	}
+	return false
 }
 
 // ConsumeNextAutoRouteGroup pops the next fallback group from the context.

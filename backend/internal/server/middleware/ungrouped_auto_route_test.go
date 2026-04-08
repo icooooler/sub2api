@@ -1,0 +1,241 @@
+//go:build unit
+
+package middleware
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+
+	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
+	"github.com/Wei-Shaw/sub2api/internal/service"
+	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/require"
+)
+
+type ungroupedAutoRouteGroupRepoStub struct {
+	groups []service.Group
+	err    error
+}
+
+type ungroupedAutoRouteAccountRepoStub struct {
+	accountsByGroupID map[int64][]service.Account
+	errByGroupID      map[int64]error
+}
+
+func (s *ungroupedAutoRouteAccountRepoStub) ListSchedulableByGroupID(ctx context.Context, groupID int64) ([]service.Account, error) {
+	if err := s.errByGroupID[groupID]; err != nil {
+		return nil, err
+	}
+	return s.accountsByGroupID[groupID], nil
+}
+func (s *ungroupedAutoRouteGroupRepoStub) GetByID(ctx context.Context, id int64) (*service.Group, error) {
+	for i := range s.groups {
+		if s.groups[i].ID == id {
+			group := s.groups[i]
+			return &group, nil
+		}
+	}
+	return nil, service.ErrGroupNotFound
+}
+
+func (s *ungroupedAutoRouteGroupRepoStub) GetByIDLite(ctx context.Context, id int64) (*service.Group, error) {
+	return s.GetByID(ctx, id)
+}
+
+func (s *ungroupedAutoRouteGroupRepoStub) List(ctx context.Context, params pagination.PaginationParams) ([]service.Group, *pagination.PaginationResult, error) {
+	if s.err != nil {
+		return nil, nil, s.err
+	}
+	return s.groups, &pagination.PaginationResult{Page: 1, PageSize: len(s.groups), Total: int64(len(s.groups))}, nil
+}
+
+func (s *ungroupedAutoRouteGroupRepoStub) ListActive(ctx context.Context) ([]service.Group, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s.groups, nil
+}
+
+func (s *ungroupedAutoRouteGroupRepoStub) ListActiveByPlatform(ctx context.Context, platform string) ([]service.Group, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	result := make([]service.Group, 0, len(s.groups))
+	for i := range s.groups {
+		if s.groups[i].Platform == platform {
+			result = append(result, s.groups[i])
+		}
+	}
+	return result, nil
+}
+
+func (s *ungroupedAutoRouteGroupRepoStub) Create(ctx context.Context, group *service.Group) error {
+	panic("unexpected call to Create")
+}
+
+func (s *ungroupedAutoRouteGroupRepoStub) Update(ctx context.Context, group *service.Group) error {
+	panic("unexpected call to Update")
+}
+
+func (s *ungroupedAutoRouteGroupRepoStub) Delete(ctx context.Context, id int64) error {
+	panic("unexpected call to Delete")
+}
+
+func (s *ungroupedAutoRouteGroupRepoStub) DeleteCascade(ctx context.Context, id int64) ([]int64, error) {
+	panic("unexpected call to DeleteCascade")
+}
+
+func (s *ungroupedAutoRouteGroupRepoStub) ExistsByName(ctx context.Context, name string) (bool, error) {
+	panic("unexpected call to ExistsByName")
+}
+
+func (s *ungroupedAutoRouteGroupRepoStub) ListWithFilters(ctx context.Context, params pagination.PaginationParams, platform, status, search string, isExclusive *bool) ([]service.Group, *pagination.PaginationResult, error) {
+	panic("unexpected call to ListWithFilters")
+}
+
+func (s *ungroupedAutoRouteGroupRepoStub) GetAccountCount(ctx context.Context, groupID int64) (int64, int64, error) {
+	panic("unexpected call to GetAccountCount")
+}
+
+func (s *ungroupedAutoRouteGroupRepoStub) DeleteAccountGroupsByGroupID(ctx context.Context, groupID int64) (int64, error) {
+	panic("unexpected call to DeleteAccountGroupsByGroupID")
+}
+
+func (s *ungroupedAutoRouteGroupRepoStub) GetAccountIDsByGroupIDs(ctx context.Context, groupIDs []int64) ([]int64, error) {
+	panic("unexpected call to GetAccountIDsByGroupIDs")
+}
+
+func (s *ungroupedAutoRouteGroupRepoStub) BindAccountsToGroup(ctx context.Context, groupID int64, accountIDs []int64) error {
+	panic("unexpected call to BindAccountsToGroup")
+}
+
+func (s *ungroupedAutoRouteGroupRepoStub) UpdateSortOrders(ctx context.Context, updates []service.GroupSortOrderUpdate) error {
+	panic("unexpected call to UpdateSortOrders")
+}
+
+func TestUngroupedAutoRoute_PrefersExactDefaultMappedModel(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	groupRepo := &ungroupedAutoRouteGroupRepoStub{groups: []service.Group{
+		{ID: 2, Name: "codex", Platform: service.PlatformOpenAI, DefaultMappedModel: "gpt-5.4", Status: service.StatusActive, Hydrated: true},
+		{ID: 5, Name: "zhipu", Platform: service.PlatformOpenAI, DefaultMappedModel: "glm-5", Status: service.StatusActive, Hydrated: true},
+		{ID: 1, Name: "claude", Platform: service.PlatformAnthropic, Status: service.StatusActive, Hydrated: true},
+	}}
+
+	user := &service.User{ID: 10, Role: service.RoleUser, Status: service.StatusActive}
+	apiKey := &service.APIKey{ID: 100, User: user, UserID: user.ID, Status: service.StatusActive}
+
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		c.Set(string(ContextKeyAPIKey), apiKey)
+		c.Next()
+	})
+	r.Use(UngroupedAutoRoute(groupRepo, nil, nil, AnthropicErrorWriter))
+	r.POST("/t", func(c *gin.Context) {
+		gotKey, ok := GetAPIKeyFromContext(c)
+		require.True(t, ok)
+		require.NotNil(t, gotKey.GroupID)
+		require.Equal(t, int64(5), *gotKey.GroupID)
+		require.NotNil(t, gotKey.Group)
+		require.Equal(t, int64(5), gotKey.Group.ID)
+
+		fallback := ConsumeNextAutoRouteGroup(c)
+		require.NotNil(t, fallback)
+		require.Equal(t, int64(2), fallback.ID)
+		c.Status(http.StatusOK)
+	})
+
+	body, err := json.Marshal(map[string]any{"model": "glm-5"})
+	require.NoError(t, err)
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/t", bytes.NewReader(body))
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestUngroupedAutoRoute_PrefersGroupWithSchedulableModelSupport(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	groupRepo := &ungroupedAutoRouteGroupRepoStub{groups: []service.Group{
+		{ID: 2, Name: "codex", Platform: service.PlatformOpenAI, Status: service.StatusActive, Hydrated: true},
+		{ID: 5, Name: "zhipu", Platform: service.PlatformAnthropic, Status: service.StatusActive, Hydrated: true},
+		{ID: 1, Name: "claude", Platform: service.PlatformAnthropic, Status: service.StatusActive, Hydrated: true},
+	}}
+	accountRepo := &ungroupedAutoRouteAccountRepoStub{accountsByGroupID: map[int64][]service.Account{
+		2: {{ID: 20, Platform: service.PlatformOpenAI, Credentials: map[string]any{"model_mapping": map[string]any{"gpt-5.4": "gpt-5.4"}}}},
+		5: {{ID: 50, Platform: service.PlatformAnthropic, Credentials: map[string]any{"model_mapping": map[string]any{"glm-5": "glm-5"}}}},
+		1: {{ID: 10, Platform: service.PlatformAnthropic, Credentials: map[string]any{"model_mapping": map[string]any{"claude-sonnet-4-5": "claude-sonnet-4-5"}}}},
+	}}
+
+	user := &service.User{ID: 10, Role: service.RoleUser, Status: service.StatusActive}
+	apiKey := &service.APIKey{ID: 100, User: user, UserID: user.ID, Status: service.StatusActive}
+
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		c.Set(string(ContextKeyAPIKey), apiKey)
+		c.Next()
+	})
+	r.Use(UngroupedAutoRoute(groupRepo, accountRepo, nil, AnthropicErrorWriter))
+	r.POST("/t", func(c *gin.Context) {
+		gotKey, ok := GetAPIKeyFromContext(c)
+		require.True(t, ok)
+		require.NotNil(t, gotKey.GroupID)
+		require.Equal(t, int64(5), *gotKey.GroupID)
+
+		fallback := ConsumeNextAutoRouteGroup(c)
+		require.NotNil(t, fallback)
+		require.Equal(t, int64(2), fallback.ID)
+		c.Status(http.StatusOK)
+	})
+
+	body, err := json.Marshal(map[string]any{"model": "glm-5"})
+	require.NoError(t, err)
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/t", bytes.NewReader(body))
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestUngroupedAutoRoute_UsesWildcardModelSupportForPriority(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	groupRepo := &ungroupedAutoRouteGroupRepoStub{groups: []service.Group{
+		{ID: 2, Name: "codex", Platform: service.PlatformOpenAI, Status: service.StatusActive, Hydrated: true},
+		{ID: 5, Name: "zhipu", Platform: service.PlatformAnthropic, Status: service.StatusActive, Hydrated: true},
+	}}
+	accountRepo := &ungroupedAutoRouteAccountRepoStub{accountsByGroupID: map[int64][]service.Account{
+		2: {{ID: 20, Platform: service.PlatformOpenAI, Credentials: map[string]any{"model_mapping": map[string]any{"gpt-*": "gpt-5.4"}}}},
+		5: {{ID: 50, Platform: service.PlatformAnthropic, Credentials: map[string]any{"model_mapping": map[string]any{"glm-*": "glm-5"}}}},
+	}}
+
+	user := &service.User{ID: 10, Role: service.RoleUser, Status: service.StatusActive}
+	apiKey := &service.APIKey{ID: 100, User: user, UserID: user.ID, Status: service.StatusActive}
+
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		c.Set(string(ContextKeyAPIKey), apiKey)
+		c.Next()
+	})
+	r.Use(UngroupedAutoRoute(groupRepo, accountRepo, nil, AnthropicErrorWriter))
+	r.POST("/t", func(c *gin.Context) {
+		gotKey, ok := GetAPIKeyFromContext(c)
+		require.True(t, ok)
+		require.NotNil(t, gotKey.GroupID)
+		require.Equal(t, int64(5), *gotKey.GroupID)
+		c.Status(http.StatusOK)
+	})
+
+	body, err := json.Marshal(map[string]any{"model": "glm-5-air"})
+	require.NoError(t, err)
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/t", bytes.NewReader(body))
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+}

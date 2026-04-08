@@ -272,7 +272,7 @@ func normalizeCodexModel(model string) string {
 		return "gpt-5.1"
 	}
 
-	return "gpt-5.1"
+	return modelID
 }
 
 func SupportsVerbosity(model string) bool {
