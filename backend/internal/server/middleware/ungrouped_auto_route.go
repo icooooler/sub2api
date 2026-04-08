@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"sort"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 	"github.com/Wei-Shaw/sub2api/internal/service"
@@ -63,14 +64,15 @@ func UngroupedAutoRoute(
 			"model", modelVal,
 			"api_key_id", apiKey.ID)
 
-		// Use model name to infer platform, then query groups of that platform.
-		// If no candidates found, fall back to all active groups of any platform
-		// so that unknown model prefixes can still find the right group.
+		// Use model name to infer platform, then query ALL active groups
+		// and sort them so inferred-platform groups come first. This ensures
+		// the primary group matches the correct handler while still allowing
+		// cross-platform fallback for unknown model prefixes.
 		platform := service.InferPlatformFromModel(modelVal)
 		slog.Debug("ungrouped_auto_route",
 			"inferred_platform", platform)
 
-		groups, err := groupRepo.ListActiveByPlatform(c.Request.Context(), platform)
+		allGroups, err := groupRepo.ListActive(c.Request.Context())
 		if err != nil {
 			slog.Error("ungrouped_auto_route: failed to query groups", "error", err)
 			writeError(c, http.StatusInternalServerError, "Failed to query groups")
@@ -78,20 +80,8 @@ func UngroupedAutoRoute(
 			return
 		}
 
-		candidates := filterCandidateGroups(groups, apiKey)
-
-		// Cross-platform fallback: if inferred platform yielded no candidates,
-		// try all active groups so unknown model prefixes can still be served.
-		if len(candidates) == 0 {
-			allGroups, err := groupRepo.ListActive(c.Request.Context())
-			if err != nil {
-				slog.Error("ungrouped_auto_route: failed to query all groups", "error", err)
-				writeError(c, http.StatusInternalServerError, "Failed to query groups")
-				c.Abort()
-				return
-			}
-			candidates = filterCandidateGroups(allGroups, apiKey)
-		}
+		candidates := filterCandidateGroups(allGroups, apiKey)
+		sortCandidatesByPlatformPriority(candidates, platform)
 
 		slog.Debug("ungrouped_auto_route",
 			"candidate_groups", len(candidates),
@@ -153,6 +143,21 @@ func filterCandidateGroups(groups []service.Group, apiKey *service.APIKey) []ser
 		candidates = append(candidates, *g)
 	}
 	return candidates
+}
+
+// sortCandidatesByPlatformPriority sorts candidates so groups matching the
+// inferred platform come first, preserving original order within each tier.
+// This ensures the primary group picks the correct handler for route dispatch
+// while still exposing other-platform groups as fallback candidates.
+func sortCandidatesByPlatformPriority(candidates []service.Group, inferredPlatform string) {
+	sort.SliceStable(candidates, func(i, j int) bool {
+		iMatch := candidates[i].Platform == inferredPlatform
+		jMatch := candidates[j].Platform == inferredPlatform
+		if iMatch != jMatch {
+			return iMatch
+		}
+		return false // preserve original order within same tier
+	})
 }
 
 // ConsumeNextAutoRouteGroup pops the next fallback group from the context.

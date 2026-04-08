@@ -4,7 +4,8 @@ import "strings"
 
 // InferPlatformFromModel determines which platform a model name belongs to
 // based on well-known model name prefixes.
-// Returns PlatformAnthropic as default fallback for unknown models.
+// Returns PlatformOpenAI as default fallback for unknown models, since the
+// OpenAI-compatible format is the most universal third-party API format.
 func InferPlatformFromModel(model string) string {
 	model = strings.ToLower(model)
 
@@ -27,8 +28,10 @@ func InferPlatformFromModel(model string) string {
 		return PlatformAnthropic
 
 	default:
-		// Default to anthropic (preserves existing behavior for unknown models,
-		// including antigravity models which are served by anthropic groups)
-		return PlatformAnthropic
+		// Default to openai — the OpenAI-compatible format is the most universal
+		// and covers the vast majority of third-party models (GLM, Qwen, etc.).
+		// All Anthropic models are already covered by the explicit "claude-" prefix.
+		// Antigravity models have their own dedicated routes with ForcePlatform.
+		return PlatformOpenAI
 	}
 }
