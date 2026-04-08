@@ -155,6 +155,16 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 					}
 				}
 				if err != nil {
+					// Try next auto-route candidate group if available.
+					if nextGroup := middleware2.ConsumeNextAutoRouteGroup(c); nextGroup != nil {
+						apiKey.Group = nextGroup
+						apiKey.GroupID = &nextGroup.ID
+						reqLog.Info("openai_chat_completions.auto_route_fallback",
+							zap.Int64("next_group_id", nextGroup.ID),
+							zap.String("next_group_name", nextGroup.Name),
+						)
+						continue
+					}
 					h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", "Service temporarily unavailable", streamStarted)
 					return
 				}

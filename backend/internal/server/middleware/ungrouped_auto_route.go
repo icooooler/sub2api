@@ -2,10 +2,12 @@ package middleware
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"log/slog"
 	"net/http"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
@@ -13,7 +15,12 @@ import (
 
 // UngroupedAutoRoute resolves the target group for ungrouped API keys
 // by inspecting the request body's "model" field and matching it to
-// a platform-specific group the user has access to.
+// an active group the user has access to.
+//
+// When multiple candidate groups exist (e.g. two openai-type groups for
+// different providers), the first candidate is set as the current group
+// and the remaining candidates are stored in context so that downstream
+// handlers can fall back to the next group if no accounts are found.
 //
 // Prerequisite: must run AFTER apiKeyAuth and RequireGroupAssignment.
 // When the key already has a group, this middleware is a no-op.
@@ -52,13 +59,14 @@ func UngroupedAutoRoute(
 			return
 		}
 
-		platform := service.InferPlatformFromModel(modelVal)
 		slog.Debug("ungrouped_auto_route",
 			"model", modelVal,
-			"inferred_platform", platform,
 			"api_key_id", apiKey.ID)
 
-		groups, err := groupRepo.ListActiveByPlatform(c.Request.Context(), platform)
+		// Query all active groups and let account selection determine which
+		// group can serve the requested model. This avoids relying on model
+		// name prefix heuristics to infer the platform.
+		allGroups, err := groupRepo.ListActive(c.Request.Context())
 		if err != nil {
 			slog.Error("ungrouped_auto_route: failed to query groups", "error", err)
 			writeError(c, http.StatusInternalServerError, "Failed to query groups")
@@ -66,45 +74,29 @@ func UngroupedAutoRoute(
 			return
 		}
 
+		candidates := filterCandidateGroups(allGroups, apiKey)
+
 		slog.Debug("ungrouped_auto_route",
-			"candidate_groups", len(groups),
-			"platform", platform)
+			"candidate_groups", len(candidates))
 
-		// Find the first group the user can access:
-		// - non-subscription (v1 simplification: skip subscription-type groups)
-		// - non-exclusive OR in user's AllowedGroups
-		var resolved *service.Group
-		for i := range groups {
-			g := &groups[i]
-			if g.IsSubscriptionType() {
-				slog.Debug("ungrouped_auto_route: skip subscription group",
-					"group_id", g.ID, "group_name", g.Name)
-				continue
-			}
-			if apiKey.User != nil && !apiKey.User.CanBindGroup(g.ID, g.IsExclusive) {
-				slog.Debug("ungrouped_auto_route: user cannot bind group",
-					"group_id", g.ID, "group_name", g.Name, "is_exclusive", g.IsExclusive)
-				continue
-			}
-			resolved = g
-			break
-		}
-
-		if resolved == nil {
+		if len(candidates) == 0 {
 			slog.Warn("ungrouped_auto_route: no group resolved",
-				"model", modelVal, "platform", platform, "api_key_id", apiKey.ID)
+				"model", modelVal, "api_key_id", apiKey.ID)
 			writeError(c, http.StatusForbidden,
 				"No available group found for the requested model. Please contact the administrator.")
 			c.Abort()
 			return
 		}
 
+		resolved := &candidates[0]
+
 		slog.Info("ungrouped_auto_route: resolved",
 			"model", modelVal,
-			"platform", platform,
 			"group_id", resolved.ID,
 			"group_name", resolved.Name,
+			"group_platform", resolved.Platform,
 			"hydrated", resolved.Hydrated,
+			"candidate_count", len(candidates),
 			"api_key_id", apiKey.ID)
 
 		// Inject resolved group into the API key in context.
@@ -113,6 +105,72 @@ func UngroupedAutoRoute(
 		c.Set(string(ContextKeyAPIKey), apiKey)
 		setGroupContext(c, resolved)
 
+		// Store remaining candidates for downstream fallback.
+		if len(candidates) > 1 {
+			fallbacks := candidates[1:]
+			ctx := context.WithValue(c.Request.Context(), ctxkey.AutoRouteFallbackGroups, fallbacks)
+			c.Request = c.Request.WithContext(ctx)
+		}
+
 		c.Next()
 	}
+}
+
+// filterCandidateGroups returns groups the user can access:
+// non-subscription and non-exclusive (or in AllowedGroups).
+func filterCandidateGroups(groups []service.Group, apiKey *service.APIKey) []service.Group {
+	candidates := make([]service.Group, 0, len(groups))
+	for i := range groups {
+		g := &groups[i]
+		if g.IsSubscriptionType() {
+			slog.Debug("ungrouped_auto_route: skip subscription group",
+				"group_id", g.ID, "group_name", g.Name)
+			continue
+		}
+		if apiKey.User != nil && !apiKey.User.CanBindGroup(g.ID, g.IsExclusive) {
+			slog.Debug("ungrouped_auto_route: user cannot bind group",
+				"group_id", g.ID, "group_name", g.Name, "is_exclusive", g.IsExclusive)
+			continue
+		}
+		candidates = append(candidates, *g)
+	}
+	return candidates
+}
+
+// ConsumeNextAutoRouteGroup pops the next fallback group from the context.
+// Returns nil if no more candidates are available.
+// When a group is returned, it also updates the API key and group context.
+func ConsumeNextAutoRouteGroup(c *gin.Context) *service.Group {
+	fallbacks, ok := c.Request.Context().Value(ctxkey.AutoRouteFallbackGroups).([]service.Group)
+	if !ok || len(fallbacks) == 0 {
+		return nil
+	}
+
+	next := &fallbacks[0]
+	remaining := fallbacks[1:]
+
+	// Update context with remaining fallbacks.
+	var ctx context.Context
+	if len(remaining) > 0 {
+		ctx = context.WithValue(c.Request.Context(), ctxkey.AutoRouteFallbackGroups, remaining)
+	} else {
+		ctx = context.WithValue(c.Request.Context(), ctxkey.AutoRouteFallbackGroups, ([]service.Group)(nil))
+	}
+	c.Request = c.Request.WithContext(ctx)
+
+	// Update the API key's group binding.
+	apiKey, ok := GetAPIKeyFromContext(c)
+	if ok {
+		apiKey.Group = next
+		apiKey.GroupID = &next.ID
+		c.Set(string(ContextKeyAPIKey), apiKey)
+		setGroupContext(c, next)
+	}
+
+	slog.Info("ungrouped_auto_route: fallback to next group",
+		"group_id", next.ID,
+		"group_name", next.Name,
+		"remaining_candidates", len(remaining))
+
+	return next
 }

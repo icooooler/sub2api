@@ -248,6 +248,17 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 				zap.Int("excluded_account_count", len(failedAccountIDs)),
 			)
 			if len(failedAccountIDs) == 0 {
+				// No accounts found in current group on first attempt.
+				// Try next auto-route candidate group if available.
+				if nextGroup := middleware2.ConsumeNextAutoRouteGroup(c); nextGroup != nil {
+					apiKey.Group = nextGroup
+					apiKey.GroupID = &nextGroup.ID
+					reqLog.Info("openai.auto_route_fallback",
+						zap.Int64("next_group_id", nextGroup.ID),
+						zap.String("next_group_name", nextGroup.Name),
+					)
+					continue
+				}
 				h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", "Service temporarily unavailable", streamStarted)
 				return
 			}
@@ -654,6 +665,16 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 					}
 				}
 				if err != nil {
+					// Try next auto-route candidate group if available.
+					if nextGroup := middleware2.ConsumeNextAutoRouteGroup(c); nextGroup != nil {
+						apiKey.Group = nextGroup
+						apiKey.GroupID = &nextGroup.ID
+						reqLog.Info("openai_messages.auto_route_fallback",
+							zap.Int64("next_group_id", nextGroup.ID),
+							zap.String("next_group_name", nextGroup.Name),
+						)
+						continue
+					}
 					h.anthropicStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", "Service temporarily unavailable", streamStarted)
 					return
 				}

@@ -55,4 +55,8 @@ const (
 
 	// ClaudeCodeVersion stores the extracted Claude Code version from User-Agent (e.g. "2.1.22")
 	ClaudeCodeVersion Key = "ctx_claude_code_version"
+
+	// AutoRouteFallbackGroups stores remaining candidate groups for auto-route fallback
+	// when the first selected group has no available accounts for the requested model.
+	AutoRouteFallbackGroups Key = "ctx_auto_route_fallback_groups"
 )
