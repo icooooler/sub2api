@@ -116,7 +116,6 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 	var lastFailoverErr *service.UpstreamFailoverError
 
 	for {
-		c.Set("openai_chat_completions_fallback_model", "")
 		reqLog.Debug("openai_chat_completions.account_selecting", zap.Int("excluded_account_count", len(failedAccountIDs)))
 		selection, scheduleDecision, err := h.gatewayService.SelectAccountWithScheduler(
 			c.Request.Context(),
@@ -133,41 +132,18 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 				zap.Int("excluded_account_count", len(failedAccountIDs)),
 			)
 			if len(failedAccountIDs) == 0 {
-				defaultModel := ""
-				if apiKey.Group != nil {
-					defaultModel = apiKey.Group.DefaultMappedModel
-				}
-				if defaultModel != "" && defaultModel != reqModel {
-					reqLog.Info("openai_chat_completions.fallback_to_default_model",
-						zap.String("default_mapped_model", defaultModel),
+				// Try next auto-route candidate group if available.
+				if nextGroup := middleware2.ConsumeNextAutoRouteGroup(c); nextGroup != nil {
+					apiKey.Group = nextGroup
+					apiKey.GroupID = &nextGroup.ID
+					reqLog.Info("openai_chat_completions.auto_route_fallback",
+						zap.Int64("next_group_id", nextGroup.ID),
+						zap.String("next_group_name", nextGroup.Name),
 					)
-					selection, scheduleDecision, err = h.gatewayService.SelectAccountWithScheduler(
-						c.Request.Context(),
-						apiKey.GroupID,
-						"",
-						sessionHash,
-						defaultModel,
-						failedAccountIDs,
-						service.OpenAIUpstreamTransportAny,
-					)
-					if err == nil && selection != nil {
-						c.Set("openai_chat_completions_fallback_model", defaultModel)
-					}
+					continue
 				}
-				if err != nil {
-					// Try next auto-route candidate group if available.
-					if nextGroup := middleware2.ConsumeNextAutoRouteGroup(c); nextGroup != nil {
-						apiKey.Group = nextGroup
-						apiKey.GroupID = &nextGroup.ID
-						reqLog.Info("openai_chat_completions.auto_route_fallback",
-							zap.Int64("next_group_id", nextGroup.ID),
-							zap.String("next_group_name", nextGroup.Name),
-						)
-						continue
-					}
-					h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", "Service temporarily unavailable", streamStarted)
-					return
-				}
+				h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", "Service temporarily unavailable", streamStarted)
+				return
 			} else {
 				if lastFailoverErr != nil {
 					h.handleFailoverExhausted(c, lastFailoverErr, streamStarted)
@@ -195,7 +171,7 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 		service.SetOpsLatencyMs(c, service.OpsRoutingLatencyMsKey, time.Since(routingStart).Milliseconds())
 		forwardStart := time.Now()
 
-		defaultMappedModel := resolveOpenAIForwardDefaultMappedModel(apiKey, c.GetString("openai_chat_completions_fallback_model"))
+		defaultMappedModel := resolveOpenAIForwardDefaultMappedModel(apiKey, "")
 		forwardBody := body
 		if channelMapping.Mapped {
 			forwardBody = h.gatewayService.ReplaceModelInBody(body, channelMapping.MappedModel)
