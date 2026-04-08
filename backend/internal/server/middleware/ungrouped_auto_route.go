@@ -63,10 +63,14 @@ func UngroupedAutoRoute(
 			"model", modelVal,
 			"api_key_id", apiKey.ID)
 
-		// Query all active groups and let account selection determine which
-		// group can serve the requested model. This avoids relying on model
-		// name prefix heuristics to infer the platform.
-		allGroups, err := groupRepo.ListActive(c.Request.Context())
+		// Use model name to infer platform, then query groups of that platform.
+		// If no candidates found, fall back to all active groups of any platform
+		// so that unknown model prefixes can still find the right group.
+		platform := service.InferPlatformFromModel(modelVal)
+		slog.Debug("ungrouped_auto_route",
+			"inferred_platform", platform)
+
+		groups, err := groupRepo.ListActiveByPlatform(c.Request.Context(), platform)
 		if err != nil {
 			slog.Error("ungrouped_auto_route: failed to query groups", "error", err)
 			writeError(c, http.StatusInternalServerError, "Failed to query groups")
@@ -74,14 +78,28 @@ func UngroupedAutoRoute(
 			return
 		}
 
-		candidates := filterCandidateGroups(allGroups, apiKey)
+		candidates := filterCandidateGroups(groups, apiKey)
+
+		// Cross-platform fallback: if inferred platform yielded no candidates,
+		// try all active groups so unknown model prefixes can still be served.
+		if len(candidates) == 0 {
+			allGroups, err := groupRepo.ListActive(c.Request.Context())
+			if err != nil {
+				slog.Error("ungrouped_auto_route: failed to query all groups", "error", err)
+				writeError(c, http.StatusInternalServerError, "Failed to query groups")
+				c.Abort()
+				return
+			}
+			candidates = filterCandidateGroups(allGroups, apiKey)
+		}
 
 		slog.Debug("ungrouped_auto_route",
-			"candidate_groups", len(candidates))
+			"candidate_groups", len(candidates),
+			"platform", platform)
 
 		if len(candidates) == 0 {
 			slog.Warn("ungrouped_auto_route: no group resolved",
-				"model", modelVal, "api_key_id", apiKey.ID)
+				"model", modelVal, "platform", platform, "api_key_id", apiKey.ID)
 			writeError(c, http.StatusForbidden,
 				"No available group found for the requested model. Please contact the administrator.")
 			c.Abort()
@@ -92,9 +110,9 @@ func UngroupedAutoRoute(
 
 		slog.Info("ungrouped_auto_route: resolved",
 			"model", modelVal,
+			"platform", resolved.Platform,
 			"group_id", resolved.ID,
 			"group_name", resolved.Name,
-			"group_platform", resolved.Platform,
 			"hydrated", resolved.Hydrated,
 			"candidate_count", len(candidates),
 			"api_key_id", apiKey.ID)
