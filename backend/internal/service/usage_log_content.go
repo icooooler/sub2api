@@ -1,11 +1,32 @@
 package service
 
 import (
+	"regexp"
 	"strings"
 	"unicode/utf8"
 
 	"github.com/tidwall/gjson"
 )
+
+// systemTagRe matches known XML system tags injected by AI coding clients (e.g. Claude Code CLI).
+var systemTagRe = buildSystemTagRegexp(
+	"local-command-caveat",
+	"command-name",
+	"command-message",
+	"command-args",
+	"local-command-stdout",
+	"system-reminder",
+	"user-prompt-submit-hook",
+	"task-notification",
+)
+
+func buildSystemTagRegexp(tags ...string) *regexp.Regexp {
+	parts := make([]string, len(tags))
+	for i, tag := range tags {
+		parts[i] = `<` + regexp.QuoteMeta(tag) + `>.*?</` + regexp.QuoteMeta(tag) + `>`
+	}
+	return regexp.MustCompile(`(?s)(?:` + strings.Join(parts, "|") + `)`)
+}
 
 func ExtractUserInputContent(body []byte, maxLen int) *string {
 	if len(body) == 0 || maxLen <= 0 || !gjson.ValidBytes(body) {
@@ -13,13 +34,13 @@ func ExtractUserInputContent(body []byte, maxLen int) *string {
 	}
 
 	if content := extractLastResponsesInputContent(body); content != "" {
-		return truncateUsageContent(content, maxLen)
+		return truncateUsageContent(stripXMLSystemTags(content), maxLen)
 	}
 	if content := extractLastUserMessageContent(body); content != "" {
-		return truncateUsageContent(content, maxLen)
+		return truncateUsageContent(stripXMLSystemTags(content), maxLen)
 	}
 	if content := extractLastGeminiUserContent(body); content != "" {
-		return truncateUsageContent(content, maxLen)
+		return truncateUsageContent(stripXMLSystemTags(content), maxLen)
 	}
 	return nil
 }
@@ -141,6 +162,12 @@ func extractLastGeminiUserContent(body []byte) string {
 		}
 	}
 	return ""
+}
+
+// stripXMLSystemTags removes known XML system tag blocks injected by AI coding
+// clients so that only the actual user input text remains.
+func stripXMLSystemTags(s string) string {
+	return strings.TrimSpace(systemTagRe.ReplaceAllString(s, ""))
 }
 
 func truncateUsageContent(content string, maxLen int) *string {

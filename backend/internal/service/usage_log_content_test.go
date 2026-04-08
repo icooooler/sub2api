@@ -51,6 +51,24 @@ func TestExtractUserInputContent(t *testing.T) {
 			want:   usageContentStringPtr("你好"),
 			maxLen: 2,
 		},
+		{
+			name:   "strips system tags from messages content",
+			body:   `{"messages":[{"role":"user","content":"<local-command-caveat>Caveat: ignore</local-command-caveat>\n<command-name>/model</command-name>\n<local-command-stdout>Set model</local-command-stdout>\n你好"}]}`,
+			want:   usageContentStringPtr("你好"),
+			maxLen: 500,
+		},
+		{
+			name:   "strips system-reminder tags",
+			body:   `{"messages":[{"role":"user","content":"hello<system-reminder>some reminder</system-reminder>"}]}`,
+			want:   usageContentStringPtr("hello"),
+			maxLen: 500,
+		},
+		{
+			name:   "returns nil when only system tags",
+			body:   `{"messages":[{"role":"user","content":"<command-name>/model</command-name>\n<local-command-stdout>done</local-command-stdout>"}]}`,
+			want:   nil,
+			maxLen: 500,
+		},
 	}
 
 	for _, tt := range tests {
