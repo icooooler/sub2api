@@ -78,7 +78,7 @@ func UngroupedAutoRoute(
 		}
 
 		candidates := filterCandidateGroups(allGroups, apiKey)
-		sortCandidatesForModel(c.Request.Context(), candidates, modelVal, accountRepo)
+		candidates = sortAndFilterCandidatesForModel(c.Request.Context(), candidates, modelVal, accountRepo)
 
 		slog.Debug("ungrouped_auto_route",
 			"candidate_groups", len(candidates),
@@ -142,13 +142,16 @@ func filterCandidateGroups(groups []service.Group, apiKey *service.APIKey) []ser
 	return candidates
 }
 
-// sortCandidatesForModel sorts candidates so groups most likely to satisfy the
-// requested model are tried first, while preserving original order within each tier.
-// Priority:
+// sortAndFilterCandidatesForModel filters candidates to only groups that can
+// serve the requested model, then sorts them by priority.
+// Groups with no model support (no DefaultMappedModel match and no schedulable
+// account supporting the model) are removed entirely — this prevents requests
+// from being routed to a group that will inevitably fail with 503.
+//
+// Priority among remaining candidates:
 // 1. exact DefaultMappedModel match
 // 2. any schedulable account in group supports requested model
-// 3. other groups
-func sortCandidatesForModel(ctx context.Context, candidates []service.Group, requestedModel string, accountRepo groupSchedulableAccountLister) {
+func sortAndFilterCandidatesForModel(ctx context.Context, candidates []service.Group, requestedModel string, accountRepo groupSchedulableAccountLister) []service.Group {
 	supportByGroupID := make(map[int64]groupSupport, len(candidates))
 	if accountRepo != nil {
 		for _, group := range candidates {
@@ -156,11 +159,25 @@ func sortCandidatesForModel(ctx context.Context, candidates []service.Group, req
 		}
 	}
 
-	sort.SliceStable(candidates, func(i, j int) bool {
-		iScore := candidatePriority(candidates[i], requestedModel, supportByGroupID[candidates[i].ID])
-		jScore := candidatePriority(candidates[j], requestedModel, supportByGroupID[candidates[j].ID])
+	// Filter: keep only groups that can serve the requested model.
+	filtered := make([]service.Group, 0, len(candidates))
+	for _, g := range candidates {
+		pri := candidatePriority(g, requestedModel, supportByGroupID[g.ID])
+		if pri <= 1 {
+			filtered = append(filtered, g)
+		} else {
+			slog.Debug("ungrouped_auto_route: skip group without model support",
+				"group_id", g.ID, "group_name", g.Name, "model", requestedModel)
+		}
+	}
+
+	sort.SliceStable(filtered, func(i, j int) bool {
+		iScore := candidatePriority(filtered[i], requestedModel, supportByGroupID[filtered[i].ID])
+		jScore := candidatePriority(filtered[j], requestedModel, supportByGroupID[filtered[j].ID])
 		return iScore < jScore
 	})
+
+	return filtered
 }
 
 func candidatePriority(group service.Group, requestedModel string, support groupSupport) int {
