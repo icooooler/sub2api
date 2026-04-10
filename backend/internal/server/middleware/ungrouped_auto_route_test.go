@@ -117,7 +117,7 @@ func (s *ungroupedAutoRouteGroupRepoStub) UpdateSortOrders(ctx context.Context, 
 	panic("unexpected call to UpdateSortOrders")
 }
 
-func TestUngroupedAutoRoute_PrefersExactDefaultMappedModel(t *testing.T) {
+func TestUngroupedAutoRoute_FallsBackToDefaultMappedModelWhenAccountRepoUnavailable(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	groupRepo := &ungroupedAutoRouteGroupRepoStub{groups: []service.Group{
@@ -142,10 +142,7 @@ func TestUngroupedAutoRoute_PrefersExactDefaultMappedModel(t *testing.T) {
 		require.Equal(t, int64(5), *gotKey.GroupID)
 		require.NotNil(t, gotKey.Group)
 		require.Equal(t, int64(5), gotKey.Group.ID)
-
-		fallback := ConsumeNextAutoRouteGroup(c)
-		require.NotNil(t, fallback)
-		require.Equal(t, int64(2), fallback.ID)
+		require.Nil(t, ConsumeNextAutoRouteGroup(c))
 		c.Status(http.StatusOK)
 	})
 
@@ -187,9 +184,7 @@ func TestUngroupedAutoRoute_PrefersGroupWithSchedulableModelSupport(t *testing.T
 		require.NotNil(t, gotKey.GroupID)
 		require.Equal(t, int64(5), *gotKey.GroupID)
 
-		fallback := ConsumeNextAutoRouteGroup(c)
-		require.NotNil(t, fallback)
-		require.Equal(t, int64(2), fallback.ID)
+		require.Nil(t, ConsumeNextAutoRouteGroup(c))
 		c.Status(http.StatusOK)
 	})
 
@@ -202,7 +197,7 @@ func TestUngroupedAutoRoute_PrefersGroupWithSchedulableModelSupport(t *testing.T
 	require.Equal(t, http.StatusOK, w.Code)
 }
 
-func TestUngroupedAutoRoute_UsesWildcardModelSupportForPriority(t *testing.T) {
+func TestUngroupedAutoRoute_UsesWildcardModelSupport(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	groupRepo := &ungroupedAutoRouteGroupRepoStub{groups: []service.Group{
@@ -232,6 +227,50 @@ func TestUngroupedAutoRoute_UsesWildcardModelSupportForPriority(t *testing.T) {
 	})
 
 	body, err := json.Marshal(map[string]any{"model": "glm-5-air"})
+	require.NoError(t, err)
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/t", bytes.NewReader(body))
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestUngroupedAutoRoute_PreservesFirstMatchingGroupAcrossPlatforms(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	groupRepo := &ungroupedAutoRouteGroupRepoStub{groups: []service.Group{
+		{ID: 5, Name: "anthropic-first", Platform: service.PlatformAnthropic, Status: service.StatusActive, Hydrated: true},
+		{ID: 2, Name: "openai-second", Platform: service.PlatformOpenAI, DefaultMappedModel: "gpt-5.4", Status: service.StatusActive, Hydrated: true},
+		{ID: 9, Name: "other", Platform: service.PlatformGemini, Status: service.StatusActive, Hydrated: true},
+	}}
+	accountRepo := &ungroupedAutoRouteAccountRepoStub{accountsByGroupID: map[int64][]service.Account{
+		5: {{ID: 50, Platform: service.PlatformAnthropic, Credentials: map[string]any{"model_mapping": map[string]any{"gpt-5.4": "gpt-5.4"}}}},
+		2: {{ID: 20, Platform: service.PlatformOpenAI, Credentials: map[string]any{"model_mapping": map[string]any{"gpt-5.4": "gpt-5.4"}}}},
+		9: {{ID: 90, Platform: service.PlatformGemini, Credentials: map[string]any{"model_mapping": map[string]any{"gemini-2.5-pro": "gemini-2.5-pro"}}}},
+	}}
+
+	user := &service.User{ID: 10, Role: service.RoleUser, Status: service.StatusActive}
+	apiKey := &service.APIKey{ID: 100, User: user, UserID: user.ID, Status: service.StatusActive}
+
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		c.Set(string(ContextKeyAPIKey), apiKey)
+		c.Next()
+	})
+	r.Use(UngroupedAutoRoute(groupRepo, accountRepo, nil, AnthropicErrorWriter))
+	r.POST("/t", func(c *gin.Context) {
+		gotKey, ok := GetAPIKeyFromContext(c)
+		require.True(t, ok)
+		require.NotNil(t, gotKey.GroupID)
+		require.Equal(t, int64(5), *gotKey.GroupID)
+
+		fallback := ConsumeNextAutoRouteGroup(c)
+		require.NotNil(t, fallback)
+		require.Equal(t, int64(2), fallback.ID)
+		c.Status(http.StatusOK)
+	})
+
+	body, err := json.Marshal(map[string]any{"model": "gpt-5.4"})
 	require.NoError(t, err)
 
 	w := httptest.NewRecorder()

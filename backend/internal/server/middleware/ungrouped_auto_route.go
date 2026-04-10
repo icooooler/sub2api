@@ -6,7 +6,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"sort"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 	"github.com/Wei-Shaw/sub2api/internal/service"
@@ -142,56 +141,34 @@ func filterCandidateGroups(groups []service.Group, apiKey *service.APIKey) []ser
 	return candidates
 }
 
-// sortAndFilterCandidatesForModel filters candidates to only groups that can
-// serve the requested model, then sorts them by priority.
-// Groups with no model support (no DefaultMappedModel match and no schedulable
-// account supporting the model) are removed entirely — this prevents requests
-// from being routed to a group that will inevitably fail with 503.
+// sortAndFilterCandidatesForModel keeps only groups that can actually serve the
+// requested model while preserving the original candidate ordering.
 //
-// Priority among remaining candidates:
-// 1. exact DefaultMappedModel match
-// 2. any schedulable account in group supports requested model
+// When accountRepo is available, a group is considered routable only if it has
+// at least one schedulable account supporting the requested model. This avoids
+// selecting a group solely because its default mapping matches while no account
+// in that group can really handle the request.
+//
+// When accountRepo is unavailable, fall back to an exact DefaultMappedModel
+// match so middleware-only tests and lightweight callers still have a minimal
+// routing signal.
 func sortAndFilterCandidatesForModel(ctx context.Context, candidates []service.Group, requestedModel string, accountRepo groupSchedulableAccountLister) []service.Group {
-	supportByGroupID := make(map[int64]groupSupport, len(candidates))
-	if accountRepo != nil {
-		for _, group := range candidates {
-			supportByGroupID[group.ID] = groupSupport{supportsModel: groupSupportsModel(ctx, accountRepo, group.ID, requestedModel)}
-		}
-	}
-
-	// Filter: keep only groups that can serve the requested model.
 	filtered := make([]service.Group, 0, len(candidates))
 	for _, g := range candidates {
-		pri := candidatePriority(g, requestedModel, supportByGroupID[g.ID])
-		if pri <= 1 {
-			filtered = append(filtered, g)
-		} else {
-			slog.Debug("ungrouped_auto_route: skip group without model support",
-				"group_id", g.ID, "group_name", g.Name, "model", requestedModel)
+		supportsModel := false
+		if accountRepo != nil {
+			supportsModel = groupSupportsModel(ctx, accountRepo, g.ID, requestedModel)
+		} else if g.DefaultMappedModel == requestedModel {
+			supportsModel = true
 		}
+		if supportsModel {
+			filtered = append(filtered, g)
+			continue
+		}
+		slog.Debug("ungrouped_auto_route: skip group without model support",
+			"group_id", g.ID, "group_name", g.Name, "model", requestedModel)
 	}
-
-	sort.SliceStable(filtered, func(i, j int) bool {
-		iScore := candidatePriority(filtered[i], requestedModel, supportByGroupID[filtered[i].ID])
-		jScore := candidatePriority(filtered[j], requestedModel, supportByGroupID[filtered[j].ID])
-		return iScore < jScore
-	})
-
 	return filtered
-}
-
-func candidatePriority(group service.Group, requestedModel string, support groupSupport) int {
-	if group.DefaultMappedModel == requestedModel {
-		return 0
-	}
-	if support.supportsModel {
-		return 1
-	}
-	return 2
-}
-
-type groupSupport struct {
-	supportsModel bool
 }
 
 func groupSupportsModel(ctx context.Context, accountRepo groupSchedulableAccountLister, groupID int64, requestedModel string) bool {
