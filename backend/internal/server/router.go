@@ -34,6 +34,7 @@ func SetupRouter(
 	redisClient *redis.Client,
 	groupRepo service.GroupRepository,
 	accountRepo service.AccountRepository,
+	gatewayCache service.GatewayCache,
 ) *gin.Engine {
 	// 缓存 iframe 页面的 origin 列表，用于动态注入 CSP frame-src
 	var cachedFrameOrigins atomic.Pointer[[]string]
@@ -83,7 +84,7 @@ func SetupRouter(
 	}
 
 	// 注册路由
-	registerRoutes(r, handlers, jwtAuth, adminAuth, apiKeyAuth, apiKeyService, subscriptionService, opsService, settingService, cfg, redisClient, groupRepo, accountRepo)
+	registerRoutes(r, handlers, jwtAuth, adminAuth, apiKeyAuth, apiKeyService, subscriptionService, opsService, settingService, cfg, redisClient, groupRepo, accountRepo, gatewayCache)
 
 	return r
 }
@@ -103,6 +104,7 @@ func registerRoutes(
 	redisClient *redis.Client,
 	groupRepo service.GroupRepository,
 	accountRepo service.AccountRepository,
+	gatewayCache service.GatewayCache,
 ) {
 	// 通用路由（健康检查、状态等）
 	routes.RegisterCommonRoutes(r)
@@ -114,5 +116,5 @@ func registerRoutes(
 	routes.RegisterAuthRoutes(v1, h, jwtAuth, redisClient, settingService)
 	routes.RegisterUserRoutes(v1, h, jwtAuth, settingService)
 	routes.RegisterAdminRoutes(v1, h, adminAuth)
-	routes.RegisterGatewayRoutes(r, h, apiKeyAuth, apiKeyService, subscriptionService, opsService, settingService, cfg, groupRepo, accountRepo)
+	routes.RegisterGatewayRoutes(r, h, apiKeyAuth, apiKeyService, subscriptionService, opsService, settingService, cfg, groupRepo, accountRepo, gatewayCache)
 }

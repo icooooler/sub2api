@@ -6,9 +6,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 	"github.com/Wei-Shaw/sub2api/internal/service"
@@ -26,12 +28,63 @@ type ungroupedAutoRouteAccountRepoStub struct {
 	errByGroupID      map[int64]error
 }
 
+type ungroupedAutoRouteCacheStub struct {
+	stickyGroups map[string]int64
+}
+
 func (s *ungroupedAutoRouteAccountRepoStub) ListSchedulableByGroupID(ctx context.Context, groupID int64) ([]service.Account, error) {
 	if err := s.errByGroupID[groupID]; err != nil {
 		return nil, err
 	}
 	return s.accountsByGroupID[groupID], nil
 }
+
+func (s *ungroupedAutoRouteCacheStub) GetSessionAccountID(context.Context, int64, string) (int64, error) {
+	return 0, nil
+}
+
+func (s *ungroupedAutoRouteCacheStub) SetSessionAccountID(context.Context, int64, string, int64, time.Duration) error {
+	return nil
+}
+
+func (s *ungroupedAutoRouteCacheStub) RefreshSessionTTL(context.Context, int64, string, time.Duration) error {
+	return nil
+}
+
+func (s *ungroupedAutoRouteCacheStub) DeleteSessionAccountID(context.Context, int64, string) error {
+	return nil
+}
+
+func (s *ungroupedAutoRouteCacheStub) GetStickyAutoRouteGroupID(_ context.Context, apiKeyID int64, sessionHash, modelKey string) (int64, error) {
+	if s == nil || s.stickyGroups == nil {
+		return 0, nil
+	}
+	return s.stickyGroups[stickyAutoRouteCacheKey(apiKeyID, sessionHash, modelKey)], nil
+}
+
+func (s *ungroupedAutoRouteCacheStub) SetStickyAutoRouteGroupID(_ context.Context, apiKeyID int64, sessionHash, modelKey string, groupID int64, _ time.Duration) error {
+	if s == nil {
+		return nil
+	}
+	if s.stickyGroups == nil {
+		s.stickyGroups = map[string]int64{}
+	}
+	s.stickyGroups[stickyAutoRouteCacheKey(apiKeyID, sessionHash, modelKey)] = groupID
+	return nil
+}
+
+func (s *ungroupedAutoRouteCacheStub) DeleteStickyAutoRouteGroupID(_ context.Context, apiKeyID int64, sessionHash, modelKey string) error {
+	if s == nil || s.stickyGroups == nil {
+		return nil
+	}
+	delete(s.stickyGroups, stickyAutoRouteCacheKey(apiKeyID, sessionHash, modelKey))
+	return nil
+}
+
+func stickyAutoRouteCacheKey(apiKeyID int64, sessionHash, modelKey string) string {
+	return fmt.Sprintf("%d:%s:%s", apiKeyID, sessionHash, modelKey)
+}
+
 func (s *ungroupedAutoRouteGroupRepoStub) GetByID(ctx context.Context, id int64) (*service.Group, error) {
 	for i := range s.groups {
 		if s.groups[i].ID == id {
@@ -134,7 +187,7 @@ func TestUngroupedAutoRoute_FallsBackToDefaultMappedModelWhenAccountRepoUnavaila
 		c.Set(string(ContextKeyAPIKey), apiKey)
 		c.Next()
 	})
-	r.Use(UngroupedAutoRoute(groupRepo, nil, nil, AnthropicErrorWriter))
+	r.Use(UngroupedAutoRoute(groupRepo, nil, nil, nil, AnthropicErrorWriter))
 	r.POST("/t", func(c *gin.Context) {
 		gotKey, ok := GetAPIKeyFromContext(c)
 		require.True(t, ok)
@@ -177,7 +230,7 @@ func TestUngroupedAutoRoute_PrefersGroupWithSchedulableModelSupport(t *testing.T
 		c.Set(string(ContextKeyAPIKey), apiKey)
 		c.Next()
 	})
-	r.Use(UngroupedAutoRoute(groupRepo, accountRepo, nil, AnthropicErrorWriter))
+	r.Use(UngroupedAutoRoute(groupRepo, accountRepo, nil, nil, AnthropicErrorWriter))
 	r.POST("/t", func(c *gin.Context) {
 		gotKey, ok := GetAPIKeyFromContext(c)
 		require.True(t, ok)
@@ -217,7 +270,7 @@ func TestUngroupedAutoRoute_UsesWildcardModelSupport(t *testing.T) {
 		c.Set(string(ContextKeyAPIKey), apiKey)
 		c.Next()
 	})
-	r.Use(UngroupedAutoRoute(groupRepo, accountRepo, nil, AnthropicErrorWriter))
+	r.Use(UngroupedAutoRoute(groupRepo, accountRepo, nil, nil, AnthropicErrorWriter))
 	r.POST("/t", func(c *gin.Context) {
 		gotKey, ok := GetAPIKeyFromContext(c)
 		require.True(t, ok)
@@ -257,7 +310,7 @@ func TestUngroupedAutoRoute_PreservesFirstMatchingGroupAcrossPlatforms(t *testin
 		c.Set(string(ContextKeyAPIKey), apiKey)
 		c.Next()
 	})
-	r.Use(UngroupedAutoRoute(groupRepo, accountRepo, nil, AnthropicErrorWriter))
+	r.Use(UngroupedAutoRoute(groupRepo, accountRepo, nil, nil, AnthropicErrorWriter))
 	r.POST("/t", func(c *gin.Context) {
 		gotKey, ok := GetAPIKeyFromContext(c)
 		require.True(t, ok)
@@ -277,4 +330,164 @@ func TestUngroupedAutoRoute_PreservesFirstMatchingGroupAcrossPlatforms(t *testin
 	req := httptest.NewRequest(http.MethodPost, "/t", bytes.NewReader(body))
 	r.ServeHTTP(w, req)
 	require.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestUngroupedAutoRoute_ReusesStickyGroupForSameSessionAndModelFamily(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	groupRepo := &ungroupedAutoRouteGroupRepoStub{groups: []service.Group{
+		{ID: 5, Name: "anthropic-first", Platform: service.PlatformAnthropic, Status: service.StatusActive, Hydrated: true},
+		{ID: 2, Name: "openai-second", Platform: service.PlatformOpenAI, Status: service.StatusActive, Hydrated: true},
+	}}
+	accountRepo := &ungroupedAutoRouteAccountRepoStub{accountsByGroupID: map[int64][]service.Account{
+		5: {{ID: 50, Platform: service.PlatformAnthropic, Credentials: map[string]any{"model_mapping": map[string]any{"gpt-5.4": "gpt-5.4"}}}},
+		2: {{ID: 20, Platform: service.PlatformOpenAI, Credentials: map[string]any{"model_mapping": map[string]any{"gpt-5.4": "gpt-5.4"}}}},
+	}}
+	cache := &ungroupedAutoRouteCacheStub{}
+
+	user := &service.User{ID: 10, Role: service.RoleUser, Status: service.StatusActive}
+	apiKey := &service.APIKey{ID: 100, User: user, UserID: user.ID, Status: service.StatusActive}
+
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		cloned := *apiKey
+		cloned.GroupID = nil
+		cloned.Group = nil
+		c.Set(string(ContextKeyAPIKey), &cloned)
+		c.Next()
+	})
+	r.Use(UngroupedAutoRoute(groupRepo, accountRepo, cache, nil, AnthropicErrorWriter))
+	r.POST("/t", func(c *gin.Context) {
+		gotKey, ok := GetAPIKeyFromContext(c)
+		require.True(t, ok)
+		require.NotNil(t, gotKey.GroupID)
+		require.Equal(t, int64(5), *gotKey.GroupID)
+		c.Status(http.StatusOK)
+	})
+
+	body, err := json.Marshal(map[string]any{
+		"model":    "gpt-5.4",
+		"messages": []map[string]any{{"role": "user", "content": "hello"}},
+	})
+	require.NoError(t, err)
+
+	first := httptest.NewRecorder()
+	firstReq := httptest.NewRequest(http.MethodPost, "/t", bytes.NewReader(body))
+	r.ServeHTTP(first, firstReq)
+	require.Equal(t, http.StatusOK, first.Code)
+
+	groupRepo.groups = []service.Group{
+		{ID: 2, Name: "openai-second", Platform: service.PlatformOpenAI, Status: service.StatusActive, Hydrated: true},
+		{ID: 5, Name: "anthropic-first", Platform: service.PlatformAnthropic, Status: service.StatusActive, Hydrated: true},
+	}
+
+	second := httptest.NewRecorder()
+	secondReq := httptest.NewRequest(http.MethodPost, "/t", bytes.NewReader(body))
+	r.ServeHTTP(second, secondReq)
+	require.Equal(t, http.StatusOK, second.Code)
+}
+
+func TestUngroupedAutoRoute_SeparatesStickyGroupsByModelFamily(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	groupRepo := &ungroupedAutoRouteGroupRepoStub{groups: []service.Group{
+		{ID: 5, Name: "gpt-primary", Platform: service.PlatformAnthropic, Status: service.StatusActive, Hydrated: true},
+		{ID: 2, Name: "gpt-secondary", Platform: service.PlatformOpenAI, Status: service.StatusActive, Hydrated: true},
+		{ID: 9, Name: "glm-primary", Platform: service.PlatformOpenAI, Status: service.StatusActive, Hydrated: true},
+	}}
+	accountRepo := &ungroupedAutoRouteAccountRepoStub{accountsByGroupID: map[int64][]service.Account{
+		5: {{ID: 50, Platform: service.PlatformAnthropic, Credentials: map[string]any{"model_mapping": map[string]any{"gpt-5.4": "gpt-5.4"}}}},
+		2: {{ID: 20, Platform: service.PlatformOpenAI, Credentials: map[string]any{"model_mapping": map[string]any{"gpt-5.4": "gpt-5.4"}}}},
+		9: {{ID: 90, Platform: service.PlatformOpenAI, Credentials: map[string]any{"model_mapping": map[string]any{"glm-5": "glm-5"}}}},
+	}}
+	cache := &ungroupedAutoRouteCacheStub{}
+
+	user := &service.User{ID: 10, Role: service.RoleUser, Status: service.StatusActive}
+	apiKey := &service.APIKey{ID: 100, User: user, UserID: user.ID, Status: service.StatusActive}
+
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		cloned := *apiKey
+		cloned.GroupID = nil
+		cloned.Group = nil
+		c.Set(string(ContextKeyAPIKey), &cloned)
+		c.Next()
+	})
+	r.Use(UngroupedAutoRoute(groupRepo, accountRepo, cache, nil, AnthropicErrorWriter))
+	r.POST("/t", func(c *gin.Context) {
+		gotKey, ok := GetAPIKeyFromContext(c)
+		require.True(t, ok)
+		require.NotNil(t, gotKey.GroupID)
+		c.Header("X-Group-ID", fmt.Sprintf("%d", *gotKey.GroupID))
+		c.Status(http.StatusOK)
+	})
+
+	gptBody, err := json.Marshal(map[string]any{
+		"model":    "gpt-5.4",
+		"messages": []map[string]any{{"role": "user", "content": "hello"}},
+	})
+	require.NoError(t, err)
+	glmBody, err := json.Marshal(map[string]any{
+		"model":    "glm-5",
+		"messages": []map[string]any{{"role": "user", "content": "hello"}},
+	})
+	require.NoError(t, err)
+
+	gptResp := httptest.NewRecorder()
+	r.ServeHTTP(gptResp, httptest.NewRequest(http.MethodPost, "/t", bytes.NewReader(gptBody)))
+	require.Equal(t, http.StatusOK, gptResp.Code)
+
+	require.Equal(t, "5", gptResp.Header().Get("X-Group-ID"))
+
+	glmResp := httptest.NewRecorder()
+	r.ServeHTTP(glmResp, httptest.NewRequest(http.MethodPost, "/t", bytes.NewReader(glmBody)))
+	require.Equal(t, http.StatusOK, glmResp.Code)
+	require.Equal(t, "9", glmResp.Header().Get("X-Group-ID"))
+}
+
+func TestUngroupedAutoRoute_BoundGroupKeyBypassesStickyRouting(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	groupRepo := &ungroupedAutoRouteGroupRepoStub{groups: []service.Group{
+		{ID: 5, Name: "ungrouped-target", Platform: service.PlatformAnthropic, Status: service.StatusActive, Hydrated: true},
+		{ID: 2, Name: "bound-group", Platform: service.PlatformOpenAI, Status: service.StatusActive, Hydrated: true},
+	}}
+	accountRepo := &ungroupedAutoRouteAccountRepoStub{accountsByGroupID: map[int64][]service.Account{
+		5: {{ID: 50, Platform: service.PlatformAnthropic, Credentials: map[string]any{"model_mapping": map[string]any{"gpt-5.4": "gpt-5.4"}}}},
+		2: {{ID: 20, Platform: service.PlatformOpenAI, Credentials: map[string]any{"model_mapping": map[string]any{"gpt-5.4": "gpt-5.4"}}}},
+	}}
+	cache := &ungroupedAutoRouteCacheStub{stickyGroups: map[string]int64{"preloaded": 5}}
+
+	user := &service.User{ID: 10, Role: service.RoleUser, Status: service.StatusActive}
+	boundGroupID := int64(2)
+	apiKey := &service.APIKey{ID: 100, User: user, UserID: user.ID, Status: service.StatusActive, GroupID: &boundGroupID, Group: &service.Group{ID: boundGroupID, Name: "bound-group", Platform: service.PlatformOpenAI, Status: service.StatusActive, Hydrated: true}}
+
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		cloned := *apiKey
+		c.Set(string(ContextKeyAPIKey), &cloned)
+		c.Next()
+	})
+	r.Use(UngroupedAutoRoute(groupRepo, accountRepo, cache, nil, AnthropicErrorWriter))
+	r.POST("/t", func(c *gin.Context) {
+		gotKey, ok := GetAPIKeyFromContext(c)
+		require.True(t, ok)
+		require.NotNil(t, gotKey.GroupID)
+		require.Equal(t, int64(2), *gotKey.GroupID)
+		require.Equal(t, int64(2), gotKey.Group.ID)
+		require.Nil(t, ConsumeNextAutoRouteGroup(c))
+		c.Status(http.StatusOK)
+	})
+
+	body, err := json.Marshal(map[string]any{
+		"model":    "gpt-5.4",
+		"messages": []map[string]any{{"role": "user", "content": "hello"}},
+	})
+	require.NoError(t, err)
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/t", bytes.NewReader(body))
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+	require.Equal(t, map[string]int64{"preloaded": 5}, cache.stickyGroups)
 }

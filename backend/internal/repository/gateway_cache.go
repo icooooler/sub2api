@@ -9,7 +9,10 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-const stickySessionPrefix = "sticky_session:"
+const (
+	stickySessionPrefix   = "sticky_session:"
+	stickyAutoRoutePrefix = "sticky_auto_route:"
+)
 
 type gatewayCache struct {
 	rdb *redis.Client
@@ -23,6 +26,25 @@ func NewGatewayCache(rdb *redis.Client) service.GatewayCache {
 // 格式: sticky_session:{groupID}:{sessionHash}
 func buildSessionKey(groupID int64, sessionHash string) string {
 	return fmt.Sprintf("%s%d:%s", stickySessionPrefix, groupID, sessionHash)
+}
+
+func buildStickyAutoRouteKey(apiKeyID int64, sessionHash, modelKey string) string {
+	return fmt.Sprintf("%s%d:%s:%s", stickyAutoRoutePrefix, apiKeyID, sessionHash, modelKey)
+}
+
+func (c *gatewayCache) GetStickyAutoRouteGroupID(ctx context.Context, apiKeyID int64, sessionHash, modelKey string) (int64, error) {
+	key := buildStickyAutoRouteKey(apiKeyID, sessionHash, modelKey)
+	return c.rdb.Get(ctx, key).Int64()
+}
+
+func (c *gatewayCache) SetStickyAutoRouteGroupID(ctx context.Context, apiKeyID int64, sessionHash, modelKey string, groupID int64, ttl time.Duration) error {
+	key := buildStickyAutoRouteKey(apiKeyID, sessionHash, modelKey)
+	return c.rdb.Set(ctx, key, groupID, ttl).Err()
+}
+
+func (c *gatewayCache) DeleteStickyAutoRouteGroupID(ctx context.Context, apiKeyID int64, sessionHash, modelKey string) error {
+	key := buildStickyAutoRouteKey(apiKeyID, sessionHash, modelKey)
+	return c.rdb.Del(ctx, key).Err()
 }
 
 func (c *gatewayCache) GetSessionAccountID(ctx context.Context, groupID int64, sessionHash string) (int64, error) {

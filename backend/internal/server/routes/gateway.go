@@ -23,6 +23,7 @@ func RegisterGatewayRoutes(
 	cfg *config.Config,
 	groupRepo service.GroupRepository,
 	accountRepo service.AccountRepository,
+	gatewayCache service.GatewayCache,
 ) {
 	bodyLimit := middleware.RequestBodyLimit(cfg.Gateway.MaxBodySize)
 	clientRequestID := middleware.ClientRequestID()
@@ -34,8 +35,8 @@ func RegisterGatewayRoutes(
 	requireGroupGoogle := middleware.RequireGroupAssignment(settingService, middleware.GoogleErrorWriter)
 
 	// 无分组 Key 自动路由中间件（根据请求 model 推断平台并注入分组）
-	autoRouteAnthropic := middleware.UngroupedAutoRoute(groupRepo, accountRepo, settingService, middleware.AnthropicErrorWriter)
-	autoRouteGoogle := middleware.UngroupedAutoRoute(groupRepo, accountRepo, settingService, middleware.GoogleErrorWriter)
+	autoRouteAnthropic := middleware.UngroupedAutoRoute(groupRepo, accountRepo, gatewayCache, settingService, middleware.AnthropicErrorWriter)
+	autoRouteGoogle := middleware.UngroupedAutoRoute(groupRepo, accountRepo, gatewayCache, settingService, middleware.GoogleErrorWriter)
 
 	// API网关（Claude API兼容）
 	gateway := r.Group("/v1")

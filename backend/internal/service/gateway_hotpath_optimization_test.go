@@ -144,6 +144,18 @@ func (s *stickyGatewayCacheHotpathStub) DeleteSessionAccountID(ctx context.Conte
 	return nil
 }
 
+func (s *stickyGatewayCacheHotpathStub) GetStickyAutoRouteGroupID(ctx context.Context, apiKeyID int64, sessionHash, modelKey string) (int64, error) {
+	return 0, errors.New("not found")
+}
+
+func (s *stickyGatewayCacheHotpathStub) SetStickyAutoRouteGroupID(ctx context.Context, apiKeyID int64, sessionHash, modelKey string, groupID int64, ttl time.Duration) error {
+	return nil
+}
+
+func (s *stickyGatewayCacheHotpathStub) DeleteStickyAutoRouteGroupID(ctx context.Context, apiKeyID int64, sessionHash, modelKey string) error {
+	return nil
+}
+
 func (s *modelsListAccountRepoStub) ListSchedulableByGroupID(ctx context.Context, groupID int64) ([]Account, error) {
 	s.listByGroupCalls.Add(1)
 	if s.err != nil {

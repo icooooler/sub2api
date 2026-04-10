@@ -235,6 +235,18 @@ func (m *mockGatewayCacheForPlatform) DeleteSessionAccountID(ctx context.Context
 	return nil
 }
 
+func (m *mockGatewayCacheForPlatform) GetStickyAutoRouteGroupID(ctx context.Context, apiKeyID int64, sessionHash, modelKey string) (int64, error) {
+	return 0, errors.New("not found")
+}
+
+func (m *mockGatewayCacheForPlatform) SetStickyAutoRouteGroupID(ctx context.Context, apiKeyID int64, sessionHash, modelKey string, groupID int64, ttl time.Duration) error {
+	return nil
+}
+
+func (m *mockGatewayCacheForPlatform) DeleteStickyAutoRouteGroupID(ctx context.Context, apiKeyID int64, sessionHash, modelKey string) error {
+	return nil
+}
+
 type mockGroupRepoForGateway struct {
 	groups           map[int64]*Group
 	getByIDCalls     int

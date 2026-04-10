@@ -185,6 +185,18 @@ func (c *openAIWSStateStoreTimeoutProbeCache) RefreshSessionTTL(context.Context,
 	return nil
 }
 
+func (c *openAIWSStateStoreTimeoutProbeCache) GetStickyAutoRouteGroupID(context.Context, int64, string, string) (int64, error) {
+	return 0, errors.New("not found")
+}
+
+func (c *openAIWSStateStoreTimeoutProbeCache) SetStickyAutoRouteGroupID(context.Context, int64, string, string, int64, time.Duration) error {
+	return nil
+}
+
+func (c *openAIWSStateStoreTimeoutProbeCache) DeleteStickyAutoRouteGroupID(context.Context, int64, string, string) error {
+	return nil
+}
+
 func (c *openAIWSStateStoreTimeoutProbeCache) DeleteSessionAccountID(ctx context.Context, _ int64, _ string) error {
 	if deadline, ok := ctx.Deadline(); ok {
 		c.deleteHasDeadline = true

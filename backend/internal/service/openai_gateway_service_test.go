@@ -247,8 +247,13 @@ func (c stubConcurrencyCache) GetAccountWaitingCount(ctx context.Context, accoun
 }
 
 type stubGatewayCache struct {
-	sessionBindings map[string]int64
-	deletedSessions map[string]int
+	sessionBindings         map[string]int64
+	deletedSessions         map[string]int
+	stickyAutoRouteBindings map[string]int64
+}
+
+func (c *stubGatewayCache) stickyAutoRouteKey(apiKeyID int64, sessionHash, modelKey string) string {
+	return fmt.Sprintf("%d:%s:%s", apiKeyID, sessionHash, modelKey)
 }
 
 func (c *stubGatewayCache) GetSessionAccountID(ctx context.Context, groupID int64, sessionHash string) (int64, error) {
@@ -279,6 +284,32 @@ func (c *stubGatewayCache) DeleteSessionAccountID(ctx context.Context, groupID i
 	}
 	c.deletedSessions[sessionHash]++
 	delete(c.sessionBindings, sessionHash)
+	return nil
+}
+
+func (c *stubGatewayCache) GetStickyAutoRouteGroupID(ctx context.Context, apiKeyID int64, sessionHash, modelKey string) (int64, error) {
+	if c.stickyAutoRouteBindings == nil {
+		return 0, errors.New("not found")
+	}
+	if id, ok := c.stickyAutoRouteBindings[c.stickyAutoRouteKey(apiKeyID, sessionHash, modelKey)]; ok {
+		return id, nil
+	}
+	return 0, errors.New("not found")
+}
+
+func (c *stubGatewayCache) SetStickyAutoRouteGroupID(ctx context.Context, apiKeyID int64, sessionHash, modelKey string, groupID int64, ttl time.Duration) error {
+	if c.stickyAutoRouteBindings == nil {
+		c.stickyAutoRouteBindings = make(map[string]int64)
+	}
+	c.stickyAutoRouteBindings[c.stickyAutoRouteKey(apiKeyID, sessionHash, modelKey)] = groupID
+	return nil
+}
+
+func (c *stubGatewayCache) DeleteStickyAutoRouteGroupID(ctx context.Context, apiKeyID int64, sessionHash, modelKey string) error {
+	if c.stickyAutoRouteBindings == nil {
+		return nil
+	}
+	delete(c.stickyAutoRouteBindings, c.stickyAutoRouteKey(apiKeyID, sessionHash, modelKey))
 	return nil
 }
 
