@@ -158,6 +158,9 @@ type UsageLog struct {
 	UserAgent    *string
 	IPAddress    *string
 
+	// InputContent 用户本次输入的最后一条 user 消息文本
+	InputContent *string
+
 	// Cache TTL Override 标记（管理员强制替换了缓存 TTL 计费）
 	CacheTTLOverridden bool
 

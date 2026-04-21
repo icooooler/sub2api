@@ -4388,6 +4388,7 @@ type OpenAIRecordUsageInput struct {
 	IPAddress          string // 请求的客户端 IP 地址
 	RequestPayloadHash string
 	APIKeyService      APIKeyQuotaUpdater
+	Messages           []any // 原始请求的 messages 字段，用于提取用户输入内容
 	ChannelUsageFields
 }
 
@@ -4542,6 +4543,11 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 	// 添加 IPAddress
 	if input.IPAddress != "" {
 		usageLog.IPAddress = &input.IPAddress
+	}
+
+	// 提取用户最后一条消息内容
+	if len(input.Messages) > 0 {
+		usageLog.InputContent = ExtractLastUserMessage(input.Messages)
 	}
 
 	if apiKey.GroupID != nil {

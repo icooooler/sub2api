@@ -261,6 +261,7 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 
 		userAgent := c.GetHeader("User-Agent")
 		clientIP := ip.GetClientIP(c)
+		messages := messagesFromContext(c)
 
 		h.submitUsageRecordTask(func(ctx context.Context) {
 			if err := h.gatewayService.RecordUsage(ctx, &service.OpenAIRecordUsageInput{
@@ -274,6 +275,7 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 				UserAgent:          userAgent,
 				IPAddress:          clientIP,
 				APIKeyService:      h.apiKeyService,
+				Messages:           messages,
 				ChannelUsageFields: channelMapping.ToUsageFields(reqModel, result.UpstreamModel),
 			}); err != nil {
 				logger.L().With(

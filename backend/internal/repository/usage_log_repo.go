@@ -84,6 +84,7 @@ var usageLogInsertArgTypes = [...]string{
 	"text",        // billing_mode
 	"numeric",     // account_stats_cost
 	"timestamptz", // created_at
+	"text",        // input_content
 }
 
 const rawUsageLogModelColumn = "model"
@@ -362,14 +363,15 @@ func (r *usageLogRepository) createSingle(ctx context.Context, sqlq sqlExecutor,
 			billing_tier,
 			billing_mode,
 			account_stats_cost,
-			created_at
+			created_at,
+			input_content
 		) VALUES (
 			$1, $2, $3, $4, $5, $6, $7,
 			$8, $9,
 			$10, $11, $12, $13,
 			$14, $15, $16, $17,
 			$18, $19, $20, $21, $22, $23,
-			$24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46
+			$24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47
 		)
 		ON CONFLICT (request_id, api_key_id) DO NOTHING
 		RETURNING id, created_at
@@ -800,10 +802,11 @@ func buildUsageLogBatchInsertQuery(keys []string, preparedByKey map[string]usage
 			billing_tier,
 			billing_mode,
 			account_stats_cost,
-			created_at
+			created_at,
+			input_content
 		) AS (VALUES `)
 
-	args := make([]any, 0, len(keys)*46)
+	args := make([]any, 0, len(keys)*47)
 	argPos := 1
 	for idx, key := range keys {
 		if idx > 0 {
@@ -877,7 +880,8 @@ func buildUsageLogBatchInsertQuery(keys []string, preparedByKey map[string]usage
 				billing_tier,
 				billing_mode,
 				account_stats_cost,
-				created_at
+				created_at,
+				input_content
 			)
 			SELECT
 				user_id,
@@ -925,7 +929,8 @@ func buildUsageLogBatchInsertQuery(keys []string, preparedByKey map[string]usage
 				billing_tier,
 				billing_mode,
 				account_stats_cost,
-				created_at
+				created_at,
+				input_content
 			FROM input
 			ON CONFLICT (request_id, api_key_id) DO NOTHING
 			RETURNING request_id, api_key_id, id, created_at
@@ -1013,10 +1018,11 @@ func buildUsageLogBestEffortInsertQuery(preparedList []usageLogInsertPrepared) (
 			billing_tier,
 			billing_mode,
 			account_stats_cost,
-			created_at
+			created_at,
+			input_content
 		) AS (VALUES `)
 
-	args := make([]any, 0, len(preparedList)*46)
+	args := make([]any, 0, len(preparedList)*47)
 	argPos := 1
 	for idx, prepared := range preparedList {
 		if idx > 0 {
@@ -1087,7 +1093,8 @@ func buildUsageLogBestEffortInsertQuery(preparedList []usageLogInsertPrepared) (
 			billing_tier,
 			billing_mode,
 			account_stats_cost,
-			created_at
+			created_at,
+			input_content
 		)
 		SELECT
 			user_id,
@@ -1135,7 +1142,8 @@ func buildUsageLogBestEffortInsertQuery(preparedList []usageLogInsertPrepared) (
 			billing_tier,
 			billing_mode,
 			account_stats_cost,
-			created_at
+			created_at,
+			input_content
 		FROM input
 		ON CONFLICT (request_id, api_key_id) DO NOTHING
 	`)
@@ -1191,14 +1199,15 @@ func execUsageLogInsertNoResult(ctx context.Context, sqlq sqlExecutor, prepared 
 			billing_tier,
 			billing_mode,
 			account_stats_cost,
-			created_at
+			created_at,
+			input_content
 		) VALUES (
 			$1, $2, $3, $4, $5, $6, $7,
 			$8, $9,
 			$10, $11, $12, $13,
 			$14, $15, $16, $17,
 			$18, $19, $20, $21, $22, $23,
-			$24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46
+			$24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47
 		)
 		ON CONFLICT (request_id, api_key_id) DO NOTHING
 	`, prepared.args...)
@@ -1238,6 +1247,7 @@ func prepareUsageLogInsert(log *service.UsageLog) usageLogInsertPrepared {
 		requestedModel = strings.TrimSpace(log.Model)
 	}
 	upstreamModel := nullString(log.UpstreamModel)
+	inputContent := nullString(log.InputContent)
 
 	var requestIDArg any
 	if requestID != "" {
@@ -1296,6 +1306,7 @@ func prepareUsageLogInsert(log *service.UsageLog) usageLogInsertPrepared {
 			billingMode,
 			log.AccountStatsCost, // account_stats_cost
 			createdAt,
+			inputContent, // input_content
 		},
 	}
 }

@@ -103,6 +103,21 @@ func claudeCodeBodyMapFromContextCache(c *gin.Context) map[string]any {
 	return nil
 }
 
+// messagesFromContext extracts the messages slice from the gin context's parsed request body cache.
+func messagesFromContext(c *gin.Context) []any {
+	if c == nil {
+		return nil
+	}
+	if cached, ok := c.Get(service.OpenAIParsedRequestBodyKey); ok {
+		if bodyMap, ok := cached.(map[string]any); ok {
+			if msgs, ok := bodyMap["messages"].([]any); ok {
+				return msgs
+			}
+		}
+	}
+	return nil
+}
+
 // 并发槽位等待相关常量
 //
 // 性能优化说明：

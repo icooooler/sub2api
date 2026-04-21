@@ -8019,6 +8019,9 @@ func (s *GatewayService) buildRecordUsageLog(
 		SubscriptionID:        optionalSubscriptionID(subscription),
 		CreatedAt:             time.Now(),
 	}
+	if opts != nil && opts.ParsedRequest != nil {
+		usageLog.InputContent = ExtractLastUserMessage(opts.ParsedRequest.Messages)
+	}
 	if cost != nil {
 		usageLog.InputCost = cost.InputCost
 		usageLog.OutputCost = cost.OutputCost

@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/andybalholm/brotli"
+	"github.com/klauspost/compress/zstd"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/proxyurl"
@@ -887,6 +888,12 @@ func decompressResponseBody(resp *http.Response) {
 		reader = gr
 	case "br":
 		reader = brotli.NewReader(resp.Body)
+	case "zstd":
+		zr, err := zstd.NewReader(resp.Body)
+		if err != nil {
+			return
+		}
+		reader = zr.IOReadCloser()
 	case "deflate":
 		reader = flate.NewReader(resp.Body)
 	default:

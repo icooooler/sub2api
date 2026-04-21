@@ -1055,3 +1055,50 @@ func RectifyThinkingBudget(body []byte) ([]byte, bool) {
 
 	return modified, changed
 }
+
+// ExtractLastUserMessage 从 messages 数组中提取最后一条 role=user 消息的文本内容。
+// 兼容 Anthropic 和 OpenAI 格式：content 可以是字符串或 content block 数组。
+func ExtractLastUserMessage(messages []any) *string {
+	for i := len(messages) - 1; i >= 0; i-- {
+		msg, ok := messages[i].(map[string]any)
+		if !ok {
+			continue
+		}
+		if role, _ := msg["role"].(string); role != "user" {
+			continue
+		}
+		switch c := msg["content"].(type) {
+		case string:
+			if c != "" {
+				return &c
+			}
+		case []any:
+			for _, block := range c {
+				b, ok := block.(map[string]any)
+				if !ok {
+					continue
+				}
+				if b["type"] == "text" {
+					if text, ok := b["text"].(string); ok && text != "" {
+						return &text
+					}
+				}
+			}
+		}
+		break
+	}
+	return nil
+}
+
+// MessagesFromBytes extracts the messages slice from a raw JSON request body.
+func MessagesFromBytes(body []byte) []any {
+	if len(body) == 0 {
+		return nil
+	}
+	var m map[string]any
+	if err := json.Unmarshal(body, &m); err != nil {
+		return nil
+	}
+	msgs, _ := m["messages"].([]any)
+	return msgs
+}
