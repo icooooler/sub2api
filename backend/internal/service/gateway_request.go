@@ -1056,21 +1056,27 @@ func RectifyThinkingBudget(body []byte) ([]byte, bool) {
 	return modified, changed
 }
 
-// orchestrationTagPattern 匹配 Claude Code / agent 客户端注入的编排标签块，
-// 例如 <system-reminder>...</system-reminder>、<command-name>...</command-name>
-// 等。这些不是用户敲入的内容，记录时需剥离。非贪婪 + dotall 以跨行匹配。
-var orchestrationTagPattern = regexp.MustCompile(
+// orchestrationBlockPattern 匹配「标签 + 内容整块都是编排」的注入，需连内容一起删。
+// 例如 <system-reminder>...</system-reminder>、<command-name>...</command-name> 等。
+// 非贪婪 + dotall 以跨行匹配。
+var orchestrationBlockPattern = regexp.MustCompile(
 	`(?s)<(system-reminder|command-name|command-message|command-args|local-command-stdout|local-command-stderr)>.*?</(system-reminder|command-name|command-message|command-args|local-command-stdout|local-command-stderr)>`,
 )
 
-// stripOrchestration 去除 agent 客户端注入的编排标签块，只保留人类敲入的文本。
+// orchestrationWrapperPattern 匹配「只是包装、内容是人类输入」的标签，只删标签保留内容。
+// 例如 <session>/usage-report 上周</session> -> /usage-report 上周。
+var orchestrationWrapperPattern = regexp.MustCompile(`</?(session)>`)
+
+// stripOrchestration 去除 agent 客户端注入的编排标签，只保留人类敲入的文本。
+// 编排块（如 system-reminder）连内容一起删；包装标签（如 session）只删标签留内容。
 // 例如 "继续<system-reminder>...</system-reminder>" -> "继续"。
 // 若剥离后为空（整段都是编排内容），返回空字符串，调用方应跳过。
 func stripOrchestration(text string) string {
 	if text == "" {
 		return ""
 	}
-	cleaned := orchestrationTagPattern.ReplaceAllString(text, "")
+	cleaned := orchestrationBlockPattern.ReplaceAllString(text, "")
+	cleaned = orchestrationWrapperPattern.ReplaceAllString(cleaned, "")
 	return strings.TrimSpace(cleaned)
 }
 

@@ -1290,6 +1290,8 @@ func TestStripOrchestration(t *testing.T) {
 		{"multiple reminders", "<system-reminder>a</system-reminder>core<system-reminder>b</system-reminder>", "core"},
 		{"command tags stripped", "<command-name>/login</command-name><command-message>login</command-message>实际内容", "实际内容"},
 		{"local-command-stdout stripped", "结果<local-command-stdout>some output</local-command-stdout>", "结果"},
+		{"session wrapper keeps inner", "<session>\n/usage-report 上周\n</session>", "/usage-report 上周"},
+		{"session wrapper with nested reminder", "<session>继续<system-reminder>x</system-reminder></session>", "继续"},
 		{"programmatic payload kept", "[MODE:REALTIME] scan target 10.0.0.1", "[MODE:REALTIME] scan target 10.0.0.1"},
 		{"empty input", "", ""},
 	}
