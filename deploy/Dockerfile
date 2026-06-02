@@ -19,8 +19,8 @@ FROM ${NODE_IMAGE} AS frontend-builder
 
 WORKDIR /app/frontend
 
-# Install pnpm
-RUN corepack enable && corepack prepare pnpm@latest --activate
+# Install pnpm (pinned: @latest is a moving target — v11 ignores pnpm.onlyBuiltDependencies and needs Node 22+)
+RUN corepack enable && corepack prepare pnpm@10.33.2 --activate
 
 # Install dependencies first (better caching)
 COPY frontend/package.json frontend/pnpm-lock.yaml ./
