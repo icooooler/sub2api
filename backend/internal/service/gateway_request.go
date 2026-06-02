@@ -1056,8 +1056,13 @@ func RectifyThinkingBudget(body []byte) ([]byte, bool) {
 	return modified, changed
 }
 
-// ExtractLastUserMessage 从 messages 数组中提取最后一条 role=user 消息的文本内容。
-// 兼容 Anthropic 和 OpenAI 格式：content 可以是字符串或 content block 数组。
+// ExtractLastUserMessage 从 messages 数组中反向扫描，提取最后一条「含文本」的
+// role=user 消息内容。兼容 Anthropic 和 OpenAI 格式：content 可以是字符串或
+// content block 数组。
+//
+// 注意：agentic 工具循环里，最末一条 user 消息常常是 tool_result（无文本），
+// 此时继续向前扫描，找到用户真正输入的文本，而不是停在 tool_result 上返回 nil。
+// 这样长会话里每个续传请求都能记录到用户的请求内容。
 func ExtractLastUserMessage(messages []any) *string {
 	for i := len(messages) - 1; i >= 0; i-- {
 		msg, ok := messages[i].(map[string]any)
@@ -1085,7 +1090,7 @@ func ExtractLastUserMessage(messages []any) *string {
 				}
 			}
 		}
-		break
+		// 当前 user 消息无文本（如 tool_result 续传），继续向前找上一条用户文本。
 	}
 	return nil
 }

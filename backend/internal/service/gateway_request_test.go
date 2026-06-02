@@ -1244,3 +1244,33 @@ func TestMessagesOrInputFromBody(t *testing.T) {
 		})
 	}
 }
+
+func TestExtractLastUserMessage_ScansBackPastToolResult(t *testing.T) {
+	// Agentic 续传：最后一条 user 是 tool_result（无文本），应回溯到更早的用户文本。
+	messages := []any{
+		map[string]any{"role": "user", "content": "原始用户提问"},
+		map[string]any{"role": "assistant", "content": "调用工具"},
+		map[string]any{"role": "user", "content": []any{
+			map[string]any{"type": "tool_result", "tool_use_id": "x", "content": "工具输出"},
+		}},
+	}
+	got := ExtractLastUserMessage(messages)
+	require.NotNil(t, got)
+	require.Equal(t, "原始用户提问", *got)
+}
+
+func TestExtractLastUserMessage_PrefersLatestUserText(t *testing.T) {
+	messages := []any{
+		map[string]any{"role": "user", "content": "第一条"},
+		map[string]any{"role": "assistant", "content": "回复"},
+		map[string]any{"role": "user", "content": []any{
+			map[string]any{"type": "tool_result", "content": "out"},
+		}},
+		map[string]any{"role": "user", "content": []any{
+			map[string]any{"type": "text", "text": "第二条用户文本"},
+		}},
+	}
+	got := ExtractLastUserMessage(messages)
+	require.NotNil(t, got)
+	require.Equal(t, "第二条用户文本", *got)
+}
