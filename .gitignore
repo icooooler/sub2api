@@ -117,7 +117,8 @@ backend/.installed
 # ===================
 tests
 CLAUDE.md
-.claude
+.claude/*
+!.claude/commands/
 scripts
 .code-review-state
 #openspec/
