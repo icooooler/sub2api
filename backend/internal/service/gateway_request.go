@@ -1078,7 +1078,7 @@ func ExtractLastUserMessage(messages []any) *string {
 				if !ok {
 					continue
 				}
-				if b["type"] == "text" {
+				if t, _ := b["type"].(string); t == "text" || t == "input_text" {
 					if text, ok := b["text"].(string); ok && text != "" {
 						return &text
 					}
@@ -1101,4 +1101,32 @@ func MessagesFromBytes(body []byte) []any {
 	}
 	msgs, _ := m["messages"].([]any)
 	return msgs
+}
+
+// MessagesOrInputFromBody extracts a user-message slice from a raw JSON request
+// body, supporting both the Chat/Anthropic "messages" format and the OpenAI
+// Responses "input" format (array, or bare string). The result is suitable for
+// ExtractLastUserMessage. It exists because the passthrough fast-path never
+// caches the parsed body in the gin context, so message extraction must fall
+// back to the raw body to keep recording input_content.
+func MessagesOrInputFromBody(body []byte) []any {
+	if len(body) == 0 {
+		return nil
+	}
+	var m map[string]any
+	if err := json.Unmarshal(body, &m); err != nil {
+		return nil
+	}
+	if msgs, ok := m["messages"].([]any); ok && len(msgs) > 0 {
+		return msgs
+	}
+	switch in := m["input"].(type) {
+	case []any:
+		return in
+	case string:
+		if strings.TrimSpace(in) != "" {
+			return []any{map[string]any{"role": "user", "content": in}}
+		}
+	}
+	return nil
 }

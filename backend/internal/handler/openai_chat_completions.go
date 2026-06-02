@@ -268,6 +268,10 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 		userAgent := c.GetHeader("User-Agent")
 		clientIP := ip.GetClientIP(c)
 		messages := messagesFromContext(c)
+		if len(messages) == 0 {
+			// 透传快路径不会缓存解析后的请求体，回退到原始 body 提取。
+			messages = service.MessagesOrInputFromBody(body)
+		}
 
 		h.submitUsageRecordTask(func(ctx context.Context) {
 			if err := h.gatewayService.RecordUsage(ctx, &service.OpenAIRecordUsageInput{

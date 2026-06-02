@@ -394,6 +394,11 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		clientIP := ip.GetClientIP(c)
 		requestPayloadHash := service.HashUsageRequestPayload(body)
 		messages := messagesFromContext(c)
+		if len(messages) == 0 {
+			// 透传快路径不会把解析后的请求体写入 context，回退到原始 body 提取，
+			// 以保证 input_content 仍被记录。
+			messages = service.MessagesOrInputFromBody(body)
+		}
 
 		// 使用量记录通过有界 worker 池提交，避免请求热路径创建无界 goroutine。
 		h.submitUsageRecordTask(func(ctx context.Context) {
@@ -770,6 +775,11 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 		clientIP := ip.GetClientIP(c)
 		requestPayloadHash := service.HashUsageRequestPayload(body)
 		messages := messagesFromContext(c)
+		if len(messages) == 0 {
+			// 透传快路径不会把解析后的请求体写入 context，回退到原始 body 提取，
+			// 以保证 input_content 仍被记录。
+			messages = service.MessagesOrInputFromBody(body)
+		}
 
 		h.submitUsageRecordTask(func(ctx context.Context) {
 			if err := h.gatewayService.RecordUsage(ctx, &service.OpenAIRecordUsageInput{
@@ -1277,7 +1287,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 				h.gatewayService.UpdateCodexUsageSnapshotFromHeaders(ctx, account.ID, result.ResponseHeaders)
 			}
 			h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, true, result.FirstTokenMs)
-			wsMessages := service.MessagesFromBytes(firstMessage)
+			wsMessages := service.MessagesOrInputFromBody(firstMessage)
 			h.submitUsageRecordTask(func(taskCtx context.Context) {
 				if err := h.gatewayService.RecordUsage(taskCtx, &service.OpenAIRecordUsageInput{
 					Result:             result,

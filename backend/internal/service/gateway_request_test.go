@@ -1217,3 +1217,30 @@ func BenchmarkParseGatewayRequest_New_Large(b *testing.B) {
 		_, _ = ParseGatewayRequest(data, "")
 	}
 }
+
+func TestMessagesOrInputFromBody(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		want string // expected ExtractLastUserMessage result, "" means nil
+	}{
+		{"messages string", `{"messages":[{"role":"user","content":"hello"}]}`, "hello"},
+		{"messages text blocks", `{"messages":[{"role":"user","content":[{"type":"text","text":"hi there"}]}]}`, "hi there"},
+		{"responses input string", `{"input":"do a thing"}`, "do a thing"},
+		{"responses input array input_text", `{"input":[{"role":"user","content":[{"type":"input_text","text":"codex prompt"}]}]}`, "codex prompt"},
+		{"messages preferred over input", `{"messages":[{"role":"user","content":"m"}],"input":"i"}`, "m"},
+		{"empty", `{}`, ""},
+		{"invalid json", `not json`, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := ExtractLastUserMessage(MessagesOrInputFromBody([]byte(tc.body)))
+			if tc.want == "" {
+				require.Nil(t, got)
+				return
+			}
+			require.NotNil(t, got)
+			require.Equal(t, tc.want, *got)
+		})
+	}
+}
