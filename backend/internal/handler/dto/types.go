@@ -441,6 +441,9 @@ type AdminUsageLog struct {
 	// IPAddress 用户请求 IP（仅管理员可见）
 	IPAddress *string `json:"ip_address,omitempty"`
 
+	// InputContent 用户本次请求最后一条 user 消息的文本（含原文，仅管理员可见）
+	InputContent *string `json:"input_content,omitempty"`
+
 	// Account 最小账号信息（避免泄露敏感字段）
 	Account *AccountSummary `json:"account,omitempty"`
 }

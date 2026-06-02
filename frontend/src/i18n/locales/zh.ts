@@ -4092,6 +4092,7 @@ export default {
       billingModeImage: '按次(图片)',
       allBillingModes: '全部计费模式',
       ipAddress: 'IP',
+      inputContent: '输入内容',
       clickToViewBalance: '点击查看充值记录',
       failedToLoadUser: '加载用户信息失败',
       cleanup: {

@@ -7865,6 +7865,7 @@ func (s *GatewayService) RecordUsage(ctx context.Context, input *RecordUsageInpu
 		APIKeyService:      input.APIKeyService,
 		ChannelUsageFields: input.ChannelUsageFields,
 	}, &recordUsageOpts{
+		ParsedRequest:    input.ParsedRequest,
 		EnableClaudePath: true,
 	})
 }

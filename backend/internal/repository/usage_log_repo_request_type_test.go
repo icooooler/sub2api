@@ -87,6 +87,7 @@ func TestUsageLogRepositoryCreateSyncRequestTypeAndLegacyFields(t *testing.T) {
 			sqlmock.AnyArg(), // billing_mode
 			sqlmock.AnyArg(), // account_stats_cost
 			createdAt,
+			sqlmock.AnyArg(), // input_content
 		).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "created_at"}).AddRow(int64(99), createdAt))
 
@@ -166,6 +167,7 @@ func TestUsageLogRepositoryCreate_PersistsServiceTier(t *testing.T) {
 			sqlmock.AnyArg(), // billing_mode
 			sqlmock.AnyArg(), // account_stats_cost
 			createdAt,
+			sqlmock.AnyArg(), // input_content
 		).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "created_at"}).AddRow(int64(100), createdAt))
 
@@ -578,6 +580,7 @@ func TestScanUsageLogRequestTypeAndLegacyFallback(t *testing.T) {
 			sql.NullString{},  // billing_mode
 			sql.NullFloat64{}, // account_stats_cost
 			now,
+			sql.NullString{}, // input_content
 		}})
 		require.NoError(t, err)
 		require.NotNil(t, log.ServiceTier)
@@ -626,6 +629,7 @@ func TestScanUsageLogRequestTypeAndLegacyFallback(t *testing.T) {
 			sql.NullString{},  // billing_mode
 			sql.NullFloat64{}, // account_stats_cost
 			now,
+			sql.NullString{}, // input_content
 		}})
 		require.NoError(t, err)
 		require.NotNil(t, log.ServiceTier)
@@ -674,6 +678,7 @@ func TestScanUsageLogRequestTypeAndLegacyFallback(t *testing.T) {
 			sql.NullString{},  // billing_mode
 			sql.NullFloat64{}, // account_stats_cost
 			now,
+			sql.NullString{}, // input_content
 		}})
 		require.NoError(t, err)
 		require.NotNil(t, log.ServiceTier)

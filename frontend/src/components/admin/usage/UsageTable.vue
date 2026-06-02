@@ -183,6 +183,15 @@
           <span v-else class="text-sm text-gray-400 dark:text-gray-500">-</span>
         </template>
 
+        <template #cell-input_content="{ row }">
+          <span
+            v-if="row.input_content"
+            class="block max-w-xs truncate text-sm text-gray-600 dark:text-gray-400"
+            :title="row.input_content"
+          >{{ row.input_content }}</span>
+          <span v-else class="text-sm text-gray-400 dark:text-gray-500">-</span>
+        </template>
+
         <template #empty><EmptyState :message="t('usage.noRecords')" /></template>
       </DataTable>
     </div>

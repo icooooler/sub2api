@@ -1165,6 +1165,9 @@ export interface AdminUsageLog extends UsageLog {
   // 用户请求 IP（仅管理员可见）
   ip_address?: string | null
 
+  // 用户本次请求最后一条 user 消息文本（仅管理员可见）
+  input_content?: string | null
+
   // 最小账号信息（仅管理员接口返回）
   account?: UsageLogAccountSummary
 }

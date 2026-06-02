@@ -3936,6 +3936,7 @@ export default {
       billingModeImage: 'Image',
       allBillingModes: 'All Billing Modes',
       ipAddress: 'IP',
+      inputContent: 'Input Content',
       clickToViewBalance: 'Click to view balance history',
       failedToLoadUser: 'Failed to load user info',
       cleanup: {

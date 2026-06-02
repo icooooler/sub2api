@@ -256,6 +256,7 @@ func (h *GatewayHandler) ChatCompletions(c *gin.Context) {
 		h.submitUsageRecordTask(func(ctx context.Context) {
 			if err := h.gatewayService.RecordUsage(ctx, &service.RecordUsageInput{
 				Result:             result,
+				ParsedRequest:      parsedReq,
 				APIKey:             apiKey,
 				User:               apiKey.User,
 				Account:            account,
