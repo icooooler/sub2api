@@ -1056,13 +1056,35 @@ func RectifyThinkingBudget(body []byte) ([]byte, bool) {
 	return modified, changed
 }
 
-// ExtractLastUserMessage 从 messages 数组中反向扫描，提取最后一条「含文本」的
-// role=user 消息内容。兼容 Anthropic 和 OpenAI 格式：content 可以是字符串或
+// orchestrationTagPattern 匹配 Claude Code / agent 客户端注入的编排标签块，
+// 例如 <system-reminder>...</system-reminder>、<command-name>...</command-name>
+// 等。这些不是用户敲入的内容，记录时需剥离。非贪婪 + dotall 以跨行匹配。
+var orchestrationTagPattern = regexp.MustCompile(
+	`(?s)<(system-reminder|command-name|command-message|command-args|local-command-stdout|local-command-stderr)>.*?</(system-reminder|command-name|command-message|command-args|local-command-stdout|local-command-stderr)>`,
+)
+
+// stripOrchestration 去除 agent 客户端注入的编排标签块，只保留人类敲入的文本。
+// 例如 "继续<system-reminder>...</system-reminder>" -> "继续"。
+// 若剥离后为空（整段都是编排内容），返回空字符串，调用方应跳过。
+func stripOrchestration(text string) string {
+	if text == "" {
+		return ""
+	}
+	cleaned := orchestrationTagPattern.ReplaceAllString(text, "")
+	return strings.TrimSpace(cleaned)
+}
+
+// ExtractLastUserMessage 从 messages 数组中反向扫描，提取最后一条「含人类文本」
+// 的 role=user 消息内容。兼容 Anthropic 和 OpenAI 格式：content 可以是字符串或
 // content block 数组。
 //
-// 注意：agentic 工具循环里，最末一条 user 消息常常是 tool_result（无文本），
+// 注意 1：agentic 工具循环里，最末一条 user 消息常常是 tool_result（无文本），
 // 此时继续向前扫描，找到用户真正输入的文本，而不是停在 tool_result 上返回 nil。
 // 这样长会话里每个续传请求都能记录到用户的请求内容。
+//
+// 注意 2：Claude Code 等客户端会把 <system-reminder> 等编排标签注入进 user 文本，
+// 这些不是用户真实输入。提取时通过 stripOrchestration 剥离；若某块剥离后为空
+// （纯编排），视为无文本继续向前扫描。
 func ExtractLastUserMessage(messages []any) *string {
 	for i := len(messages) - 1; i >= 0; i-- {
 		msg, ok := messages[i].(map[string]any)
@@ -1074,8 +1096,8 @@ func ExtractLastUserMessage(messages []any) *string {
 		}
 		switch c := msg["content"].(type) {
 		case string:
-			if c != "" {
-				return &c
+			if cleaned := stripOrchestration(c); cleaned != "" {
+				return &cleaned
 			}
 		case []any:
 			for _, block := range c {
@@ -1084,13 +1106,15 @@ func ExtractLastUserMessage(messages []any) *string {
 					continue
 				}
 				if t, _ := b["type"].(string); t == "text" || t == "input_text" {
-					if text, ok := b["text"].(string); ok && text != "" {
-						return &text
+					if text, ok := b["text"].(string); ok {
+						if cleaned := stripOrchestration(text); cleaned != "" {
+							return &cleaned
+						}
 					}
 				}
 			}
 		}
-		// 当前 user 消息无文本（如 tool_result 续传），继续向前找上一条用户文本。
+		// 当前 user 消息无人类文本（tool_result 续传 / 纯编排），继续向前扫描。
 	}
 	return nil
 }

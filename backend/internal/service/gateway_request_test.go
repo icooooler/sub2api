@@ -1274,3 +1274,61 @@ func TestExtractLastUserMessage_PrefersLatestUserText(t *testing.T) {
 	require.NotNil(t, got)
 	require.Equal(t, "第二条用户文本", *got)
 }
+
+func TestStripOrchestration(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"plain human text", "继续", "继续"},
+		{"human text with trailing reminder", "继续<system-reminder>This is an injected reminder.</system-reminder>", "继续"},
+		{"human text with leading reminder", "<system-reminder>foo</system-reminder>真正的问题", "真正的问题"},
+		{"reminder in the middle", "前<system-reminder>x</system-reminder>后", "前后"},
+		{"multiline reminder", "你好<system-reminder>line1\nline2\nline3</system-reminder>", "你好"},
+		{"pure reminder becomes empty", "<system-reminder>only orchestration</system-reminder>", ""},
+		{"multiple reminders", "<system-reminder>a</system-reminder>core<system-reminder>b</system-reminder>", "core"},
+		{"command tags stripped", "<command-name>/login</command-name><command-message>login</command-message>实际内容", "实际内容"},
+		{"local-command-stdout stripped", "结果<local-command-stdout>some output</local-command-stdout>", "结果"},
+		{"programmatic payload kept", "[MODE:REALTIME] scan target 10.0.0.1", "[MODE:REALTIME] scan target 10.0.0.1"},
+		{"empty input", "", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, stripOrchestration(tc.in))
+		})
+	}
+}
+
+func TestExtractLastUserMessage_StripsReminderFromHumanText(t *testing.T) {
+	// Claude Code 把 <system-reminder> 注入进 user 文本，只保留人类敲入的部分。
+	messages := []any{
+		map[string]any{"role": "user", "content": "继续<system-reminder>injected orchestration\nmore lines</system-reminder>"},
+	}
+	got := ExtractLastUserMessage(messages)
+	require.NotNil(t, got)
+	require.Equal(t, "继续", *got)
+}
+
+func TestExtractLastUserMessage_SkipsPureOrchestrationBlock(t *testing.T) {
+	// 最后一条 user 文本块整段是编排内容，应跳过回溯到真正的人类输入。
+	messages := []any{
+		map[string]any{"role": "user", "content": "人类真实提问"},
+		map[string]any{"role": "assistant", "content": "回复"},
+		map[string]any{"role": "user", "content": []any{
+			map[string]any{"type": "text", "text": "<system-reminder>pure orchestration, no human text</system-reminder>"},
+		}},
+	}
+	got := ExtractLastUserMessage(messages)
+	require.NotNil(t, got)
+	require.Equal(t, "人类真实提问", *got)
+}
+
+func TestExtractLastUserMessage_KeepsProgrammaticPayload(t *testing.T) {
+	messages := []any{
+		map[string]any{"role": "user", "content": "[MODE:REALTIME] do the scan"},
+	}
+	got := ExtractLastUserMessage(messages)
+	require.NotNil(t, got)
+	require.Equal(t, "[MODE:REALTIME] do the scan", *got)
+}
