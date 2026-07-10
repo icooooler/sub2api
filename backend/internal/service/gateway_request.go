@@ -3,6 +3,7 @@ package service
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"regexp"
@@ -119,6 +120,7 @@ func clearGatewayRequestDerivedState(parsed *ParsedRequest) {
 	parsed.MaxTokens = 0
 	parsed.systemRange = missingJSONRange()
 	parsed.messagesRange = missingJSONRange()
+	parsed.inputRange = missingJSONRange()
 }
 
 func clearGatewayRequestRanges(parsed *ParsedRequest) {
@@ -128,6 +130,7 @@ func clearGatewayRequestRanges(parsed *ParsedRequest) {
 	parsed.HasSystem = false
 	parsed.systemRange = missingJSONRange()
 	parsed.messagesRange = missingJSONRange()
+	parsed.inputRange = missingJSONRange()
 }
 
 func setGatewayRequestRanges(parsed *ParsedRequest, protocol string, jsonStr string) {
@@ -150,6 +153,11 @@ func setGatewayRequestRanges(parsed *ParsedRequest, protocol string, jsonStr str
 		if msgs := gjson.Get(jsonStr, "messages"); msgs.Exists() && msgs.IsArray() {
 			parsed.messagesRange = rangeFromResult(msgs)
 		}
+		if protocol == "responses" {
+			if input := gjson.Get(jsonStr, "input"); input.Exists() {
+				parsed.inputRange = rangeFromResult(input)
+			}
+		}
 	}
 }
 
@@ -161,7 +169,7 @@ func parseGatewayRequestCurrentBody(parsed *ParsedRequest, protocol string) erro
 
 	bodyBytes := parsed.Body.Bytes()
 	if !gjson.ValidBytes(bodyBytes) {
-		return fmt.Errorf("invalid json")
+		return DescribeInvalidJSON(bodyBytes)
 	}
 
 	// 只在当前函数内零拷贝读取 JSON 字段；ReplaceBody 后必须重新进入本函数刷新派生状态。
@@ -209,6 +217,26 @@ func refreshGatewayRequestRanges(parsed *ParsedRequest, protocol string) error {
 	return parseGatewayRequestCurrentBody(parsed, protocol)
 }
 
+// DescribeInvalidJSON returns a diagnostic error for a request body that
+// failed JSON validation. It re-parses with encoding/json (failure path only)
+// to pinpoint the first offending byte, so operators can distinguish genuinely
+// invalid JSON from a truncated / partially consumed body. The error carries
+// only length/offset/character information — never body content — so callers
+// may safely wrap or log it.
+func DescribeInvalidJSON(body []byte) error {
+	var raw json.RawMessage
+	if err := json.Unmarshal(body, &raw); err != nil {
+		var syntaxErr *json.SyntaxError
+		if errors.As(err, &syntaxErr) {
+			return fmt.Errorf("invalid json (len=%d, offset=%d): %s", len(body), syntaxErr.Offset, syntaxErr.Error())
+		}
+		return fmt.Errorf("invalid json (len=%d): %w", len(body), err)
+	}
+	// gjson rejected the body but encoding/json accepted it (divergent edge
+	// cases, e.g. certain malformed UTF-8 sequences); report the basics.
+	return fmt.Errorf("invalid json (len=%d)", len(body))
+}
+
 // ParsedRequest 保存网关请求的预解析结果
 //
 // 性能优化说明：
@@ -235,6 +263,7 @@ type ParsedRequest struct {
 	protocol      string    // 当前 Body 的协议格式，用于 Body 替换后刷新 raw range
 	systemRange   jsonRange // system/systemInstruction.parts 的 raw JSON 范围，绑定 Body 当前内容
 	messagesRange jsonRange // messages/contents 的 raw JSON 范围，绑定 Body 当前内容
+	inputRange    jsonRange // Responses API input 的 raw JSON 范围，绑定 Body 当前内容
 
 	// GroupID 请求所属分组 ID（来自 API Key）
 	GroupID *int64
@@ -315,6 +344,10 @@ func (p *ParsedRequest) SystemRaw() []byte {
 
 func (p *ParsedRequest) MessagesRaw() []byte {
 	return p.raw(p.messagesRange)
+}
+
+func (p *ParsedRequest) InputRaw() []byte {
+	return p.raw(p.inputRange)
 }
 
 func (p *ParsedRequest) DecodeSystem(dst any) error {
@@ -504,13 +537,22 @@ func StripEmptyTextBlocks(body []byte) []byte {
 
 // FilterThinkingBlocks removes thinking blocks from request body
 // Returns filtered body or original body if filtering fails (fail-safe)
-// This prevents 400 errors from invalid thinking block signatures
+// This prevents 400 errors from invalid thinking block signatures.
 //
-// 策略：
+// mappedModel 是「实际发给上游的模型 ID」(after account model mapping)，用于按
+// 协议族分流。仅 anthropic-strict 走原过滤逻辑；passback-required 与 unknown
+// 一律保留全部 thinking block，避免误伤第三方兼容上游
+// (DeepSeek `/anthropic`、Kimi `/coding`、GLM、Moonshot 等)，详见
+// .pensieve/short-term/knowledge/thinking-block-filter-third-party-upstream-inversion/。
+//
+// 策略 (anthropic-strict only)：
 //   - 当 thinking.type 不是 "enabled"/"adaptive"：移除所有 thinking 相关块
 //   - 当 thinking.type 是 "enabled"/"adaptive"：仅移除缺失/无效 signature 的 thinking 块（避免 400）
 //     (blocks with missing/empty/dummy signatures that would cause 400 errors)
-func FilterThinkingBlocks(body []byte) []byte {
+func FilterThinkingBlocks(body []byte, mappedModel string) []byte {
+	if !ShouldPreFilterThinkingBlocks(mappedModel) {
+		return body
+	}
 	return filterThinkingBlocksInternal(body, false)
 }
 
@@ -528,7 +570,17 @@ func FilterThinkingBlocks(body []byte) []byte {
 //   - Convert `thinking` blocks to `text` blocks (preserve the thinking content).
 //   - Remove `redacted_thinking` blocks (cannot be converted to text).
 //   - Ensure no message ends up with empty content.
-func FilterThinkingBlocksForRetry(body []byte) []byte {
+//
+// mappedModel 用于按协议族分流：仅 anthropic-strict 执行上述变形；
+// passback-required (DeepSeek/Kimi/GLM 等) 与 unknown 一律返回原 body，
+// 因为这类上游的契约就是「thinking block 原样回传」（或我们不了解），
+// retry 任何变形都不会修好 400，反而破坏契约。详见 thinking_protocol.go。
+func FilterThinkingBlocksForRetry(body []byte, mappedModel string) []byte {
+	// 仅 anthropic-strict 走整流；passback-required 与 unknown 都返回原 body。
+	if !ShouldApplyRetryFilters(mappedModel) {
+		return body
+	}
+
 	hasThinkingContent := bytes.Contains(body, patternTypeThinking) ||
 		bytes.Contains(body, patternTypeThinkingSpaced) ||
 		bytes.Contains(body, patternTypeRedactedThinking) ||
@@ -871,7 +923,14 @@ func anthropicBetaTokensContains(header, token string) bool {
 //
 // Use this only when needed: converting tool blocks to text changes model behaviour and can increase the
 // risk of prompt injection (tool output becomes plain conversation text).
-func FilterSignatureSensitiveBlocksForRetry(body []byte) []byte {
+//
+// mappedModel 同 FilterThinkingBlocksForRetry：仅 anthropic-strict 执行变形；
+// passback-required 与 unknown 都返回原 body，避免在不熟悉的上游上盲目变形。
+func FilterSignatureSensitiveBlocksForRetry(body []byte, mappedModel string) []byte {
+	if !ShouldApplyRetryFilters(mappedModel) {
+		return body
+	}
+
 	// Fast path: only run when we see likely relevant constructs.
 	if !bytes.Contains(body, []byte(`"type":"thinking"`)) &&
 		!bytes.Contains(body, []byte(`"type": "thinking"`)) &&
@@ -1166,6 +1225,118 @@ func NormalizeClaudeOutputEffort(raw string) *string {
 	}
 }
 
+// DefaultEffortForThinkingEnabled 给"开启了 thinking 但协议层没有 effort 档位概念"
+// 的国产模型族返回一个默认 effort 字符串（"high"），用于 usage_log.reasoning_effort
+// 字段，避免该字段长期为 NULL 导致用量分析无法区分 thinking 开/关。
+//
+// 适用范围（按 ResolveThinkingProtocol 的 PassbackRequired 集合做白名单过滤）：
+//   - Kimi (kimi-* / moonshot-*)
+//   - GLM (glm-*)
+//   - MiniMax (minimax-m*)
+//   - Qwen thinking 变体 (qwen[1-4]?-*-thinking)
+//
+// **排除 DeepSeek**：DeepSeek 原生支持 reasoning_effort: high/max，客户端可显式指定，
+// 网关不应注入默认值覆盖客户端意图（即便客户端没发，DeepSeek 上游自己会用 high default
+// ——但那是上游行为，不是我们的语义注入）。
+//
+// 适用场景由调用方守卫：仅当 (1) ResolveThinkingProtocol == PassbackRequired
+// (2) 已确认 thinking 启用（Anthropic: parsed.ThinkingEnabled；OpenAI: 见
+// OpenAIBodyHasThinkingEnabled) (3) 已有 effort 解析返回 nil 三者同时成立时调用。
+//
+// 返回值固定指向 "high"。理由：Kimi/GLM/MiniMax 启用 thinking 都是"深度推理模式"，
+// 等同 Claude/OpenAI 的 high 档位语义；用 high 比 medium/normal 更贴近实际行为，
+// 也与 DeepSeek thinking-enabled 的默认 effort 一致。
+//
+// 未来兼容性：如果这些厂商后续加入真实 effort 档位（如 Kimi 跟进 DeepSeek 的
+// reasoning_effort: high/max），客户端开始显式发 effort 值时，调用方的守卫条件 (3)
+// 会因 extractor 返回非 nil 而不触发本函数，自动让出。
+func DefaultEffortForThinkingEnabled(mappedModel string) *string {
+	if ResolveThinkingProtocol(mappedModel) != ThinkingProtocolPassbackRequired {
+		return nil
+	}
+	// DeepSeek 在 PassbackRequired 集合里但有原生 effort 支持，排除。
+	if strings.HasPrefix(strings.ToLower(mappedModel), "deepseek-") {
+		return nil
+	}
+	effort := "high"
+	return &effort
+}
+
+// OpenAIBodyHasThinkingEnabled 检测 OpenAI 协议的请求体里是否启用了 thinking。
+//
+// 国产 OpenAI-兼容上游（GLM via thinkingFormat=zai / Kimi 等）在请求体里用
+// `thinking: {type: "enabled"}` 或 `thinking: {type: "adaptive"}` 表达启用。
+// 仅 "enabled" / "adaptive" 视为开启；"disabled" 或缺省 → 视为关闭。
+//
+// 配合 DefaultEffortForThinkingEnabled 使用：OpenAI 路径上 reasoning_effort 解析为空
+// 但本函数返回 true 时，给 usage_log 填默认 effort。
+func OpenAIBodyHasThinkingEnabled(body []byte) bool {
+	thinkingType := strings.ToLower(strings.TrimSpace(gjson.GetBytes(body, "thinking.type").String()))
+	return thinkingType == "enabled" || thinkingType == "adaptive"
+}
+
+// ApplyThinkingEnabledFallback 补丁已解析出的 effort，仅在 effort 为 nil 且
+// 检测到 body 里 thinking 启用 + mappedModel 属于国产 passback-required 上游时，
+// 返回 DefaultEffortForThinkingEnabled 的默认值（"high"）。不覆盖已解析出的值。
+//
+// 适用于 OpenAI 网关的多条路径调用方（避免重复的 if-nil 表达式）。
+func ApplyThinkingEnabledFallback(effort *string, body []byte, mappedModel string) *string {
+	if effort != nil {
+		return effort
+	}
+	if !OpenAIBodyHasThinkingEnabled(body) {
+		return nil
+	}
+	return DefaultEffortForThinkingEnabled(mappedModel)
+}
+
+// NormalizeGLMOpenAIReasoningEffort rewrites OpenAI Chat Completions
+// reasoning_effort values to the GLM native scale used by z.ai: high/max.
+// It only applies to glm-* mapped models and leaves all other providers untouched.
+func NormalizeGLMOpenAIReasoningEffort(body []byte, mappedModel string) ([]byte, bool) {
+	if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(mappedModel)), "glm-") {
+		return body, false
+	}
+
+	path := "reasoning.effort"
+	raw := strings.TrimSpace(gjson.GetBytes(body, path).String())
+	if raw == "" {
+		path = "reasoning_effort"
+		raw = strings.TrimSpace(gjson.GetBytes(body, path).String())
+	}
+	if raw == "" {
+		return body, false
+	}
+
+	mapped := normalizeGLMOpenAIReasoningEffort(raw)
+	if mapped == "" || mapped == raw {
+		return body, false
+	}
+
+	modified, err := sjson.SetBytes(body, path, mapped)
+	if err != nil {
+		return body, false
+	}
+	return modified, true
+}
+
+func normalizeGLMOpenAIReasoningEffort(raw string) string {
+	value := strings.ToLower(strings.TrimSpace(raw))
+	if value == "" {
+		return ""
+	}
+	value = strings.NewReplacer("-", "", "_", "", " ", "").Replace(value)
+
+	switch value {
+	case "low", "medium", "high":
+		return "high"
+	case "xhigh", "extrahigh", "max", "ultracode":
+		return "max"
+	default:
+		return ""
+	}
+}
+
 // =========================
 // Thinking Budget Rectifier
 // =========================
@@ -1253,21 +1424,51 @@ func RectifyThinkingBudget(body []byte) ([]byte, bool) {
 	return modified, changed
 }
 
-// orchestrationBlockPattern 匹配「标签 + 内容整块都是编排」的注入，需连内容一起删。
-// 例如 <system-reminder>...</system-reminder>、<command-name>...</command-name> 等。
-// 非贪婪 + dotall 以跨行匹配。
+// NormalizeChineseLLMThinking rewrites the top-level `thinking` object for Chinese
+// LLM providers that use Anthropic-compatible endpoints but have different accepted
+// values for `thinking.type`. Currently scoped to:
+//   - MiniMax M-series (`MiniMax-m*`, covering M2.x / M3 / M3.x): official docs accept
+//     only `thinking.type` of "adaptive" or "disabled"; "enabled" is not a valid value
+//     and may be rejected/ignored. Pi-ai and other Anthropic-SDK clients default to
+//     "enabled" (Anthropic-original) and never auto-rewrite for non-Anthropic models.
+//
+// Non-MiniMax models (Kimi/GLM/DeepSeek) currently accept "enabled" as-is, so this
+// function is intentionally a no-op for them. New Chinese LLM quirks should be
+// added here as separate case branches.
+//
+// Returns (modified body, true) if a rewrite was applied, or (original body, false)
+// if no rewrite was needed. Caller should be on the Anthropic forward path AFTER
+// FilterThinkingBlocks and BEFORE building the upstream request, only for
+// passback-required models (ResolveThinkingProtocol == PassbackRequired).
+func NormalizeChineseLLMThinking(body []byte, mappedModel string) ([]byte, bool) {
+	modelLower := strings.ToLower(mappedModel)
+	if !strings.HasPrefix(modelLower, "minimax-m") {
+		return body, false
+	}
+	thinkingType := gjson.GetBytes(body, "thinking.type").String()
+	if thinkingType != "enabled" {
+		return body, false
+	}
+	modified, err := sjson.SetBytes(body, "thinking.type", "adaptive")
+	if err != nil {
+		return body, false
+	}
+	return modified, true
+}
+
+// orchestrationBlockPattern matches injected orchestration blocks whose tags and
+// contents are not part of the human-authored prompt.
 var orchestrationBlockPattern = regexp.MustCompile(
 	`(?s)<(system-reminder|command-name|command-message|command-args|local-command-stdout|local-command-stderr)>.*?</(system-reminder|command-name|command-message|command-args|local-command-stdout|local-command-stderr)>`,
 )
 
-// orchestrationWrapperPattern 匹配「只是包装、内容是人类输入」的标签，只删标签保留内容。
-// 例如 <session>/usage-report 上周</session> -> /usage-report 上周。
-var orchestrationWrapperPattern = regexp.MustCompile(`</?(session)>`)
+// orchestrationWrapperPattern matches wrappers whose inner text is the actual
+// human input. Strip only the wrapper tags and keep their contents.
+var orchestrationWrapperPattern = regexp.MustCompile(`</?session>`)
 
-// stripOrchestration 去除 agent 客户端注入的编排标签，只保留人类敲入的文本。
-// 编排块（如 system-reminder）连内容一起删；包装标签（如 session）只删标签留内容。
-// 例如 "继续<system-reminder>...</system-reminder>" -> "继续"。
-// 若剥离后为空（整段都是编排内容），返回空字符串，调用方应跳过。
+// stripOrchestration removes agent-client orchestration while retaining the
+// human-authored part of the text. An empty result means the text was entirely
+// orchestration and should be ignored by the caller.
 func stripOrchestration(text string) string {
 	if text == "" {
 		return ""
@@ -1277,87 +1478,111 @@ func stripOrchestration(text string) string {
 	return strings.TrimSpace(cleaned)
 }
 
-// ExtractLastUserMessage 从 messages 数组中反向扫描，提取最后一条「含人类文本」
-// 的 role=user 消息内容。兼容 Anthropic 和 OpenAI 格式：content 可以是字符串或
-// content block 数组。
-//
-// 注意 1：agentic 工具循环里，最末一条 user 消息常常是 tool_result（无文本），
-// 此时继续向前扫描，找到用户真正输入的文本，而不是停在 tool_result 上返回 nil。
-// 这样长会话里每个续传请求都能记录到用户的请求内容。
-//
-// 注意 2：Claude Code 等客户端会把 <system-reminder> 等编排标签注入进 user 文本，
-// 这些不是用户真实输入。提取时通过 stripOrchestration 剥离；若某块剥离后为空
-// （纯编排），视为无文本继续向前扫描。
+// ExtractLastUserMessage scans backwards for the latest user message that
+// contains human-authored text. It supports Anthropic/OpenAI string content and
+// text/input_text content blocks, while skipping tool-result continuations and
+// orchestration-only messages.
 func ExtractLastUserMessage(messages []any) *string {
 	for i := len(messages) - 1; i >= 0; i-- {
-		msg, ok := messages[i].(map[string]any)
+		message, ok := messages[i].(map[string]any)
 		if !ok {
 			continue
 		}
-		if role, _ := msg["role"].(string); role != "user" {
+		role, _ := message["role"].(string)
+		_, hasGeminiParts := message["parts"]
+		// Gemini accepts content entries with an omitted role and treats them as
+		// user input. Other protocols must explicitly mark the message as user.
+		if role != "user" && !(role == "" && hasGeminiParts) {
 			continue
 		}
-		switch c := msg["content"].(type) {
+
+		textParts := make([]string, 0, 1)
+		switch content := message["content"].(type) {
 		case string:
-			if cleaned := stripOrchestration(c); cleaned != "" {
-				return &cleaned
+			if cleaned := stripOrchestration(content); cleaned != "" {
+				textParts = append(textParts, cleaned)
 			}
 		case []any:
-			for _, block := range c {
-				b, ok := block.(map[string]any)
+			for _, rawBlock := range content {
+				block, ok := rawBlock.(map[string]any)
 				if !ok {
 					continue
 				}
-				if t, _ := b["type"].(string); t == "text" || t == "input_text" {
-					if text, ok := b["text"].(string); ok {
-						if cleaned := stripOrchestration(text); cleaned != "" {
-							return &cleaned
-						}
-					}
+				blockType, _ := block["type"].(string)
+				if blockType != "text" && blockType != "input_text" {
+					continue
+				}
+				text, ok := block["text"].(string)
+				if !ok {
+					continue
+				}
+				if cleaned := stripOrchestration(text); cleaned != "" {
+					textParts = append(textParts, cleaned)
 				}
 			}
 		}
-		// 当前 user 消息无人类文本（tool_result 续传 / 纯编排），继续向前扫描。
+
+		// Gemini native requests use contents[].parts[].text instead of content.
+		if parts, ok := message["parts"].([]any); ok {
+			for _, rawPart := range parts {
+				part, ok := rawPart.(map[string]any)
+				if !ok {
+					continue
+				}
+				text, ok := part["text"].(string)
+				if !ok {
+					continue
+				}
+				if cleaned := stripOrchestration(text); cleaned != "" {
+					textParts = append(textParts, cleaned)
+				}
+			}
+		}
+		if len(textParts) > 0 {
+			joined := strings.Join(textParts, "\n")
+			return &joined
+		}
 	}
 	return nil
 }
 
-// MessagesFromBytes extracts the messages slice from a raw JSON request body.
+// MessagesFromBytes returns the messages array from a raw JSON request body.
 func MessagesFromBytes(body []byte) []any {
 	if len(body) == 0 {
 		return nil
 	}
-	var m map[string]any
-	if err := json.Unmarshal(body, &m); err != nil {
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
 		return nil
 	}
-	msgs, _ := m["messages"].([]any)
-	return msgs
+	messages, _ := payload["messages"].([]any)
+	return messages
 }
 
-// MessagesOrInputFromBody extracts a user-message slice from a raw JSON request
-// body, supporting both the Chat/Anthropic "messages" format and the OpenAI
-// Responses "input" format (array, or bare string). The result is suitable for
-// ExtractLastUserMessage. It exists because the passthrough fast-path never
-// caches the parsed body in the gin context, so message extraction must fall
-// back to the raw body to keep recording input_content.
+// MessagesOrInputFromBody returns a normalized user-message slice from either
+// Chat/Anthropic messages or OpenAI Responses input. This raw-body fallback is
+// required on passthrough paths that do not cache a decoded request body.
 func MessagesOrInputFromBody(body []byte) []any {
 	if len(body) == 0 {
 		return nil
 	}
-	var m map[string]any
-	if err := json.Unmarshal(body, &m); err != nil {
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
 		return nil
 	}
-	if msgs, ok := m["messages"].([]any); ok && len(msgs) > 0 {
-		return msgs
+	if messages, ok := payload["messages"].([]any); ok && len(messages) > 0 {
+		return messages
 	}
-	switch in := m["input"].(type) {
+	if contents, ok := payload["contents"].([]any); ok && len(contents) > 0 {
+		return contents
+	}
+
+	switch input := payload["input"].(type) {
 	case []any:
-		return in
+		return input
 	case string:
-		if strings.TrimSpace(in) != "" {
-			return []any{map[string]any{"role": "user", "content": in}}
+		if strings.TrimSpace(input) != "" {
+			return []any{map[string]any{"role": "user", "content": input}}
 		}
 	}
 	return nil

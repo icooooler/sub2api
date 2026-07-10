@@ -193,6 +193,54 @@ func TestGatewayServiceRecordUsage_PreservesRequestedAndUpstreamModels(t *testin
 	require.Equal(t, mappedModel, *usageRepo.lastLog.UpstreamModel)
 }
 
+func TestGatewayServiceRecordUsage_PropagatesInputContentSnapshot(t *testing.T) {
+	for _, tt := range []struct {
+		name        string
+		longContext bool
+	}{
+		{name: "standard"},
+		{name: "long context", longContext: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			usageRepo := &openAIRecordUsageLogRepoStub{inserted: true}
+			svc := newGatewayRecordUsageServiceForTest(usageRepo, &openAIRecordUsageUserRepoStub{}, &openAIRecordUsageSubRepoStub{})
+			inputContent := "只记录这条真实用户输入"
+			result := &ForwardResult{
+				RequestID: "gateway_input_content_" + strings.ReplaceAll(tt.name, " ", "_"),
+				Usage:     ClaudeUsage{InputTokens: 10, OutputTokens: 6},
+				Model:     "claude-sonnet-4",
+				Duration:  time.Second,
+			}
+
+			var err error
+			if tt.longContext {
+				err = svc.RecordUsageWithLongContext(context.Background(), &RecordUsageLongContextInput{
+					Result:                result,
+					APIKey:                &APIKey{ID: 501},
+					User:                  &User{ID: 601},
+					Account:               &Account{ID: 701},
+					InputContent:          &inputContent,
+					LongContextThreshold:  200000,
+					LongContextMultiplier: 2,
+				})
+			} else {
+				err = svc.RecordUsage(context.Background(), &RecordUsageInput{
+					Result:       result,
+					APIKey:       &APIKey{ID: 501},
+					User:         &User{ID: 601},
+					Account:      &Account{ID: 701},
+					InputContent: &inputContent,
+				})
+			}
+
+			require.NoError(t, err)
+			require.NotNil(t, usageRepo.lastLog)
+			require.NotNil(t, usageRepo.lastLog.InputContent)
+			require.Equal(t, inputContent, *usageRepo.lastLog.InputContent)
+		})
+	}
+}
+
 func TestGatewayServiceRecordUsage_EmptyImageSizeDefaultsBeforeBillingAndPersistence(t *testing.T) {
 	imagePrice2K := 0.19
 	groupID := int64(901)
@@ -231,6 +279,59 @@ func TestGatewayServiceRecordUsage_EmptyImageSizeDefaultsBeforeBillingAndPersist
 	require.Equal(t, ImageSizeSourceDefault, *usageRepo.lastLog.ImageSizeSource)
 	require.InDelta(t, 0.19, usageRepo.lastLog.TotalCost, 1e-12)
 	require.InDelta(t, 0.19, usageRepo.lastLog.ActualCost, 1e-12)
+}
+
+func TestGatewayServiceRecordUsage_PeakRateAffectsTokenModeImageOutputTokens(t *testing.T) {
+	groupID := int64(902)
+	usageRepo := &openAIRecordUsageLogRepoStub{inserted: true}
+	userRepo := &openAIRecordUsageUserRepoStub{}
+	svc := newGatewayRecordUsageServiceForTest(usageRepo, userRepo, &openAIRecordUsageSubRepoStub{})
+	svc.resolver = newOpenAITokenImageChannelPricingResolverForTest(t, groupID, "gemini-image")
+
+	err := svc.RecordUsage(context.Background(), &RecordUsageInput{
+		Result: &ForwardResult{
+			RequestID:  "gateway_peak_image_tokens",
+			Model:      "gemini-image",
+			ImageCount: 1,
+			Usage: ClaudeUsage{
+				InputTokens:       1000,
+				OutputTokens:      600,
+				ImageOutputTokens: 100,
+			},
+			Duration: time.Second,
+		},
+		APIKey: &APIKey{
+			ID:      802,
+			GroupID: i64p(groupID),
+			Group: &Group{
+				ID:                 groupID,
+				RateMultiplier:     1.0,
+				SubscriptionType:   SubscriptionTypeSubscription,
+				PeakRateEnabled:    true,
+				PeakStart:          "00:00",
+				PeakEnd:            "23:59",
+				PeakRateMultiplier: 3.0,
+			},
+		},
+		User:    &User{ID: 602},
+		Account: &Account{ID: 702},
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, usageRepo.lastLog)
+	require.NotNil(t, usageRepo.lastLog.BillingMode)
+	require.Equal(t, string(BillingModeToken), *usageRepo.lastLog.BillingMode)
+	require.Equal(t, 3.0, usageRepo.lastLog.RateMultiplier)
+
+	textInput := 1000 * 3e-6
+	textOutput := 500 * 15e-6
+	imageOutput := 100 * 15e-6
+	expectedActual := (textInput + textOutput + imageOutput) * 3.0
+
+	require.InDelta(t, textInput+textOutput+imageOutput, usageRepo.lastLog.TotalCost, 1e-12)
+	require.InDelta(t, imageOutput, usageRepo.lastLog.ImageOutputCost, 1e-12)
+	require.InDelta(t, expectedActual, usageRepo.lastLog.ActualCost, 1e-12)
+	require.InDelta(t, expectedActual, userRepo.lastAmount, 1e-12)
 }
 
 func TestGatewayServiceRecordUsage_UsageLogWriteErrorDoesNotSkipBilling(t *testing.T) {
@@ -387,7 +488,9 @@ func TestGatewayServiceRecordUsage_GeneratesRequestIDWhenAllSourcesMissing(t *te
 	require.Equal(t, billingRepo.lastCmd.RequestID, usageRepo.lastLog.RequestID)
 }
 
-func TestGatewayServiceRecordUsage_DroppedUsageLogDoesNotSyncFallback(t *testing.T) {
+func TestGatewayServiceRecordUsage_DroppedUsageLogFallsBackToSyncCreate(t *testing.T) {
+	// 计费成功后 best-effort 写入被丢弃（队列超时）时必须同步兜底，
+	// 否则出现“已扣费但无 usage_log”的对账缺口（issue #3656）。
 	usageRepo := &openAIRecordUsageBestEffortLogRepoStub{
 		bestEffortErr: MarkUsageLogCreateDropped(errors.New("usage log best-effort queue full")),
 	}
@@ -411,7 +514,9 @@ func TestGatewayServiceRecordUsage_DroppedUsageLogDoesNotSyncFallback(t *testing
 
 	require.NoError(t, err)
 	require.Equal(t, 1, usageRepo.bestEffortCalls)
-	require.Equal(t, 0, usageRepo.createCalls)
+	require.Equal(t, 1, usageRepo.createCalls)
+	// 兜底调用使用的 ctx 必须仍然存活，不能带着已死的 ctx 走过场。
+	require.NoError(t, usageRepo.lastCtxErr)
 }
 
 func TestGatewayServiceRecordUsage_BillingErrorSkipsUsageLogWrite(t *testing.T) {

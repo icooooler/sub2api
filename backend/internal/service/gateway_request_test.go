@@ -77,6 +77,15 @@ func TestParseGatewayRequest_InvalidStreamType(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestParseGatewayRequest_ResponsesInput(t *testing.T) {
+	body := []byte(`{"model":"gpt-5.1","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}]}`)
+	parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), "responses")
+	require.NoError(t, err)
+	require.NotEmpty(t, parsed.InputRaw())
+	require.Nil(t, parsed.MessagesRaw())
+	require.Equal(t, "hello", gjson.ParseBytes(parsed.InputRaw()).Get("0.content.0.text").String())
+}
+
 // ============ Gemini 原生格式解析测试 ============
 
 func TestParseGatewayRequest_GeminiContents(t *testing.T) {
@@ -268,7 +277,7 @@ func TestFilterThinkingBlocks(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := FilterThinkingBlocks([]byte(tt.input))
+			result := FilterThinkingBlocks([]byte(tt.input), "claude-sonnet-4-5")
 
 			if tt.expectError {
 				// For invalid JSON, should return original
@@ -304,7 +313,7 @@ func TestFilterThinkingBlocksForRetry_DisablesThinkingAndPreservesAsText(t *test
 		]
 	}`)
 
-	out := FilterThinkingBlocksForRetry(input)
+	out := FilterThinkingBlocksForRetry(input, "claude-sonnet-4-5")
 
 	var req map[string]any
 	require.NoError(t, json.Unmarshal(out, &req))
@@ -337,7 +346,7 @@ func TestFilterThinkingBlocksForRetry_DisablesThinkingEvenWithoutThinkingBlocks(
 		]
 	}`)
 
-	out := FilterThinkingBlocksForRetry(input)
+	out := FilterThinkingBlocksForRetry(input, "claude-sonnet-4-5")
 
 	var req map[string]any
 	require.NoError(t, json.Unmarshal(out, &req))
@@ -356,7 +365,7 @@ func TestFilterThinkingBlocksForRetry_RemovesRedactedThinkingAndKeepsValidConten
 		]
 	}`)
 
-	out := FilterThinkingBlocksForRetry(input)
+	out := FilterThinkingBlocksForRetry(input, "claude-sonnet-4-5")
 
 	var req map[string]any
 	require.NoError(t, json.Unmarshal(out, &req))
@@ -392,7 +401,7 @@ func TestFilterThinkingBlocksForRetry_DropsThinkingBlockWithEmptyContent(t *test
 		]
 	}`)
 
-	out := FilterThinkingBlocksForRetry(input)
+	out := FilterThinkingBlocksForRetry(input, "claude-sonnet-4-5")
 
 	var req map[string]any
 	require.NoError(t, json.Unmarshal(out, &req))
@@ -415,7 +424,7 @@ func TestFilterThinkingBlocksForRetry_EmptyContentGetsPlaceholder(t *testing.T) 
 		]
 	}`)
 
-	out := FilterThinkingBlocksForRetry(input)
+	out := FilterThinkingBlocksForRetry(input, "claude-sonnet-4-5")
 
 	var req map[string]any
 	require.NoError(t, json.Unmarshal(out, &req))
@@ -441,7 +450,7 @@ func TestFilterThinkingBlocksForRetry_StripsEmptyTextBlocks(t *testing.T) {
 		]
 	}`)
 
-	out := FilterThinkingBlocksForRetry(input)
+	out := FilterThinkingBlocksForRetry(input, "claude-sonnet-4-5")
 
 	var req map[string]any
 	require.NoError(t, json.Unmarshal(out, &req))
@@ -476,7 +485,7 @@ func TestFilterThinkingBlocksForRetry_StripsNestedEmptyTextInToolResult(t *testi
 		]
 	}`)
 
-	out := FilterThinkingBlocksForRetry(input)
+	out := FilterThinkingBlocksForRetry(input, "claude-sonnet-4-5")
 
 	var req map[string]any
 	require.NoError(t, json.Unmarshal(out, &req))
@@ -504,7 +513,7 @@ func TestFilterThinkingBlocksForRetry_NestedAllEmptyGetsEmptySlice(t *testing.T)
 		]
 	}`)
 
-	out := FilterThinkingBlocksForRetry(input)
+	out := FilterThinkingBlocksForRetry(input, "claude-sonnet-4-5")
 
 	var req map[string]any
 	require.NoError(t, json.Unmarshal(out, &req))
@@ -587,7 +596,7 @@ func TestFilterThinkingBlocksForRetry_PreservesNonEmptyTextBlocks(t *testing.T) 
 		]
 	}`)
 
-	out := FilterThinkingBlocksForRetry(input)
+	out := FilterThinkingBlocksForRetry(input, "claude-sonnet-4-5")
 
 	// Fast path: no thinking content, no empty content, no empty text blocks → unchanged
 	require.Equal(t, input, out)
@@ -604,7 +613,7 @@ func TestFilterSignatureSensitiveBlocksForRetry_DowngradesTools(t *testing.T) {
 		]
 	}`)
 
-	out := FilterSignatureSensitiveBlocksForRetry(input)
+	out := FilterSignatureSensitiveBlocksForRetry(input, "claude-sonnet-4-5")
 
 	var req map[string]any
 	require.NoError(t, json.Unmarshal(out, &req))
@@ -691,7 +700,7 @@ func TestFilterThinkingBlocksForRetry_RemovesClearThinkingStrategy_FastPath(t *t
 		]
 	}`)
 
-	out := FilterThinkingBlocksForRetry(input)
+	out := FilterThinkingBlocksForRetry(input, "claude-sonnet-4-5")
 
 	var req map[string]any
 	require.NoError(t, json.Unmarshal(out, &req))
@@ -717,7 +726,7 @@ func TestFilterThinkingBlocksForRetry_RemovesClearThinkingStrategy_WithThinkingB
 		]
 	}`)
 
-	out := FilterThinkingBlocksForRetry(input)
+	out := FilterThinkingBlocksForRetry(input, "claude-sonnet-4-5")
 
 	var req map[string]any
 	require.NoError(t, json.Unmarshal(out, &req))
@@ -741,7 +750,7 @@ func TestFilterThinkingBlocksForRetry_NoContextManagement_Unaffected(t *testing.
 		"messages":[{"role":"user","content":[{"type":"text","text":"Hi"}]}]
 	}`)
 
-	out := FilterThinkingBlocksForRetry(input)
+	out := FilterThinkingBlocksForRetry(input, "claude-sonnet-4-5")
 
 	var req map[string]any
 	require.NoError(t, json.Unmarshal(out, &req))
@@ -764,7 +773,7 @@ func TestFilterSignatureSensitiveBlocksForRetry_RemovesClearThinkingStrategy(t *
 		]
 	}`)
 
-	out := FilterSignatureSensitiveBlocksForRetry(input)
+	out := FilterSignatureSensitiveBlocksForRetry(input, "claude-sonnet-4-5")
 
 	var req map[string]any
 	require.NoError(t, json.Unmarshal(out, &req))
@@ -795,7 +804,7 @@ func TestFilterSignatureSensitiveBlocksForRetry_PreservesNonThinkingStrategies(t
 		]
 	}`)
 
-	out := FilterSignatureSensitiveBlocksForRetry(input)
+	out := FilterSignatureSensitiveBlocksForRetry(input, "claude-sonnet-4-5")
 
 	var req map[string]any
 	require.NoError(t, json.Unmarshal(out, &req))
@@ -821,7 +830,7 @@ func TestFilterSignatureSensitiveBlocksForRetry_NoThinkingField_ContextManagemen
 		]
 	}`)
 
-	out := FilterSignatureSensitiveBlocksForRetry(input)
+	out := FilterSignatureSensitiveBlocksForRetry(input, "claude-sonnet-4-5")
 
 	var req map[string]any
 	require.NoError(t, json.Unmarshal(out, &req))
@@ -1229,35 +1238,408 @@ func BenchmarkParseGatewayRequest_New_Large(b *testing.B) {
 	}
 }
 
-func TestMessagesOrInputFromBody(t *testing.T) {
-	cases := []struct {
-		name string
-		body string
-		want string // expected ExtractLastUserMessage result, "" means nil
+func TestNormalizeChineseLLMThinking(t *testing.T) {
+	tests := []struct {
+		name          string
+		model         string
+		input         string
+		wantApplied   bool
+		wantTypeValue string // expected thinking.type after rewrite; "" = must not exist
+		wantUnchanged bool   // body must be byte-for-byte unchanged
 	}{
-		{"messages string", `{"messages":[{"role":"user","content":"hello"}]}`, "hello"},
-		{"messages text blocks", `{"messages":[{"role":"user","content":[{"type":"text","text":"hi there"}]}]}`, "hi there"},
-		{"responses input string", `{"input":"do a thing"}`, "do a thing"},
-		{"responses input array input_text", `{"input":[{"role":"user","content":[{"type":"input_text","text":"codex prompt"}]}]}`, "codex prompt"},
-		{"messages preferred over input", `{"messages":[{"role":"user","content":"m"}],"input":"i"}`, "m"},
-		{"empty", `{}`, ""},
-		{"invalid json", `not json`, ""},
+		// MiniMax M3 / M2.x — passback-required path: rewrite enabled -> adaptive
+		{
+			name:          "minimax m3 enabled -> adaptive",
+			model:         "MiniMax-M3",
+			input:         `{"model":"MiniMax-M3","thinking":{"type":"enabled","budget_tokens":8192},"messages":[]}`,
+			wantApplied:   true,
+			wantTypeValue: "adaptive",
+		},
+		{
+			name:          "minimax m2.7 enabled -> adaptive",
+			model:         "MiniMax-M2.7",
+			input:         `{"model":"MiniMax-M2.7","thinking":{"type":"enabled","budget_tokens":4096},"messages":[]}`,
+			wantApplied:   true,
+			wantTypeValue: "adaptive",
+		},
+		{
+			name:          "minimax m3 adaptive is left alone",
+			model:         "MiniMax-M3",
+			input:         `{"model":"MiniMax-M3","thinking":{"type":"adaptive","budget_tokens":8192},"messages":[]}`,
+			wantApplied:   false,
+			wantUnchanged: true,
+		},
+		{
+			name:          "minimax m3 disabled is left alone",
+			model:         "MiniMax-M3",
+			input:         `{"model":"MiniMax-M3","thinking":{"type":"disabled"},"messages":[]}`,
+			wantApplied:   false,
+			wantUnchanged: true,
+		},
+		{
+			name:          "minimax m3 with no thinking field is no-op",
+			model:         "MiniMax-M3",
+			input:         `{"model":"MiniMax-M3","messages":[]}`,
+			wantApplied:   false,
+			wantUnchanged: true,
+		},
+		// Non-MiniMax Chinese LLMs: no-op (Kimi/GLM/DeepSeek accept enabled as-is)
+		{
+			name:          "kimi k2.6 with enabled left alone",
+			model:         "kimi-k2.6",
+			input:         `{"model":"kimi-k2.6","thinking":{"type":"enabled","budget_tokens":8192},"messages":[]}`,
+			wantApplied:   false,
+			wantUnchanged: true,
+		},
+		{
+			name:          "glm-5.1 with enabled left alone",
+			model:         "glm-5.1",
+			input:         `{"model":"glm-5.1","thinking":{"type":"enabled"},"messages":[]}`,
+			wantApplied:   false,
+			wantUnchanged: true,
+		},
+		{
+			name:          "deepseek v4-pro with enabled left alone",
+			model:         "deepseek-v4-pro",
+			input:         `{"model":"deepseek-v4-pro","thinking":{"type":"enabled"},"messages":[]}`,
+			wantApplied:   false,
+			wantUnchanged: true,
+		},
+		// Anthropic-strict model: never rewritten even though prefix would not match anyway
+		{
+			name:          "claude opus 4.6 with enabled left alone",
+			model:         "claude-opus-4.6-20260201",
+			input:         `{"model":"claude-opus-4.6-20260201","thinking":{"type":"enabled","budget_tokens":8192},"messages":[]}`,
+			wantApplied:   false,
+			wantUnchanged: true,
+		},
+		// Edge case: invalid JSON — fail-safe return original
+		{
+			name:          "invalid json returned unchanged",
+			model:         "MiniMax-M3",
+			input:         `{not json`,
+			wantApplied:   false,
+			wantUnchanged: true,
+		},
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got := ExtractLastUserMessage(MessagesOrInputFromBody([]byte(tc.body)))
-			if tc.want == "" {
-				require.Nil(t, got)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, applied := NormalizeChineseLLMThinking([]byte(tt.input), tt.model)
+			require.Equal(t, tt.wantApplied, applied, "applied mismatch")
+
+			if tt.wantUnchanged {
+				require.Equal(t, tt.input, string(got), "body must be byte-for-byte unchanged")
 				return
 			}
-			require.NotNil(t, got)
-			require.Equal(t, tc.want, *got)
+
+			// Parsed-back validation: output must be valid JSON with the expected thinking.type
+			var parsed struct {
+				Thinking struct {
+					Type string `json:"type"`
+				} `json:"thinking"`
+			}
+			require.NoError(t, json.Unmarshal(got, &parsed), "output must be valid JSON")
+			require.Equal(t, tt.wantTypeValue, parsed.Thinking.Type)
 		})
 	}
 }
 
-func TestExtractLastUserMessage_ScansBackPastToolResult(t *testing.T) {
-	// Agentic 续传：最后一条 user 是 tool_result（无文本），应回溯到更早的用户文本。
+func TestDefaultEffortForThinkingEnabled(t *testing.T) {
+	tests := []struct {
+		name  string
+		model string
+		want  *string // nil = expect no fallback
+	}{
+		// passback-required 上游中不支持 effort 档位的国产模型→补默认 high
+		{name: "glm-5.1", model: "glm-5.1", want: strPtr("high")},
+		{name: "glm-4.7", model: "glm-4.7", want: strPtr("high")},
+		{name: "kimi-k2.6", model: "kimi-k2.6", want: strPtr("high")},
+		{name: "kimi-k2-thinking", model: "kimi-k2-thinking", want: strPtr("high")},
+		{name: "moonshot-v1-8k", model: "moonshot-v1-8k", want: strPtr("high")},
+		{name: "minimax-m3 (lowercase)", model: "minimax-m3", want: strPtr("high")},
+		{name: "MiniMax-M3 (mixed case)", model: "MiniMax-M3", want: strPtr("high")},
+		{name: "qwen3-thinking variant", model: "qwen3-235b-a22b-thinking-2507", want: strPtr("high")},
+
+		// DeepSeek 有原生 effort 支持→不注入默认，让客户端意图透传
+		{name: "deepseek-v4-pro excluded", model: "deepseek-v4-pro", want: nil},
+		{name: "deepseek-v4-flash excluded", model: "deepseek-v4-flash", want: nil},
+		{name: "deepseek-chat excluded", model: "deepseek-chat", want: nil},
+
+		// 非 passback-required 模型一律返回 nil
+		{name: "claude opus 4.6 (anthropic-strict)", model: "claude-opus-4.6-20260201", want: nil},
+		{name: "gpt-5.5 (unknown)", model: "gpt-5.5", want: nil},
+		{name: "gemini-3.1-pro (unknown)", model: "gemini-3.1-pro", want: nil},
+		{name: "empty", model: "", want: nil},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := DefaultEffortForThinkingEnabled(tt.model)
+			if tt.want == nil {
+				require.Nil(t, got)
+				return
+			}
+			require.NotNil(t, got)
+			require.Equal(t, *tt.want, *got)
+		})
+	}
+}
+
+func TestOpenAIBodyHasThinkingEnabled(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want bool
+	}{
+		{name: "enabled", body: `{"thinking":{"type":"enabled"}}`, want: true},
+		{name: "adaptive", body: `{"thinking":{"type":"adaptive"}}`, want: true},
+		{name: "ENABLED (uppercase)", body: `{"thinking":{"type":"ENABLED"}}`, want: true},
+		{name: "disabled", body: `{"thinking":{"type":"disabled"}}`, want: false},
+		{name: "empty body", body: ``, want: false},
+		{name: "no thinking field", body: `{"model":"gpt-5"}`, want: false},
+		{name: "thinking object but no type", body: `{"thinking":{"budget_tokens":1024}}`, want: false},
+		{name: "invalid json", body: `{not json`, want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, OpenAIBodyHasThinkingEnabled([]byte(tt.body)))
+		})
+	}
+}
+
+func TestApplyThinkingEnabledFallback(t *testing.T) {
+	tests := []struct {
+		name        string
+		effort      *string
+		body        string
+		model       string
+		want        *string
+		wantPassThr bool // 为 true 时 want 是传入 effort 原指针
+	}{
+		// effort 非 nil → 原值透传，不覆盖
+		{
+			name:        "existing effort never overridden (kimi + thinking)",
+			effort:      strPtr("medium"),
+			body:        `{"thinking":{"type":"enabled"}}`,
+			model:       "kimi-k2.6",
+			wantPassThr: true,
+		},
+		{
+			name:        "existing low effort kept for deepseek",
+			effort:      strPtr("low"),
+			body:        `{"thinking":{"type":"enabled"}}`,
+			model:       "deepseek-v4-pro",
+			wantPassThr: true,
+		},
+
+		// effort=nil + thinking enabled + passback-required 模型 → 填 high
+		{
+			name:   "glm-5.1 + thinking enabled -> high",
+			effort: nil,
+			body:   `{"thinking":{"type":"enabled"}}`,
+			model:  "glm-5.1",
+			want:   strPtr("high"),
+		},
+		{
+			name:   "kimi-k2.6 + adaptive -> high",
+			effort: nil,
+			body:   `{"thinking":{"type":"adaptive"}}`,
+			model:  "kimi-k2.6",
+			want:   strPtr("high"),
+		},
+		{
+			name:   "MiniMax-M3 + enabled -> high",
+			effort: nil,
+			body:   `{"thinking":{"type":"enabled"}}`,
+			model:  "MiniMax-M3",
+			want:   strPtr("high"),
+		},
+
+		// effort=nil + thinking disabled → nil
+		{
+			name:   "glm + thinking disabled -> nil",
+			effort: nil,
+			body:   `{"thinking":{"type":"disabled"}}`,
+			model:  "glm-5.1",
+			want:   nil,
+		},
+		{
+			name:   "glm + no thinking field -> nil",
+			effort: nil,
+			body:   `{"model":"glm-5.1"}`,
+			model:  "glm-5.1",
+			want:   nil,
+		},
+
+		// effort=nil + thinking enabled + non-passback → nil
+		{
+			name:   "deepseek + thinking enabled -> nil (deepseek excluded)",
+			effort: nil,
+			body:   `{"thinking":{"type":"enabled"}}`,
+			model:  "deepseek-v4-pro",
+			want:   nil,
+		},
+		{
+			name:   "claude + thinking enabled -> nil (strict not passback)",
+			effort: nil,
+			body:   `{"thinking":{"type":"enabled"}}`,
+			model:  "claude-opus-4.6",
+			want:   nil,
+		},
+		{
+			name:   "gpt-5 + thinking enabled -> nil (unknown)",
+			effort: nil,
+			body:   `{"thinking":{"type":"enabled"}}`,
+			model:  "gpt-5.5",
+			want:   nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ApplyThinkingEnabledFallback(tt.effort, []byte(tt.body), tt.model)
+			if tt.wantPassThr {
+				require.Same(t, tt.effort, got, "non-nil effort must be returned unchanged (same pointer)")
+				return
+			}
+			if tt.want == nil {
+				require.Nil(t, got)
+				return
+			}
+			require.NotNil(t, got)
+			require.Equal(t, *tt.want, *got)
+		})
+	}
+}
+
+func TestNormalizeGLMOpenAIReasoningEffort(t *testing.T) {
+	tests := []struct {
+		name          string
+		model         string
+		input         string
+		wantApplied   bool
+		wantPath      string
+		wantValue     string
+		wantUnchanged bool
+	}{
+		{
+			name:        "flat xhigh maps to max",
+			model:       "glm-5.2",
+			input:       `{"model":"glm-5.2","reasoning_effort":"xhigh","messages":[]}`,
+			wantApplied: true,
+			wantPath:    "reasoning_effort",
+			wantValue:   "max",
+		},
+		{
+			name:        "flat x-high maps to max",
+			model:       "GLM-5.2",
+			input:       `{"model":"glm-5.2","reasoning_effort":"x-high","messages":[]}`,
+			wantApplied: true,
+			wantPath:    "reasoning_effort",
+			wantValue:   "max",
+		},
+		{
+			name:        "flat ultracode maps to max",
+			model:       "glm-5.2",
+			input:       `{"model":"glm-5.2","reasoning_effort":"ultracode","messages":[]}`,
+			wantApplied: true,
+			wantPath:    "reasoning_effort",
+			wantValue:   "max",
+		},
+		{
+			name:        "flat medium maps to high",
+			model:       "glm-5.2",
+			input:       `{"model":"glm-5.2","reasoning_effort":"medium","messages":[]}`,
+			wantApplied: true,
+			wantPath:    "reasoning_effort",
+			wantValue:   "high",
+		},
+		{
+			name:        "nested high case-normalizes",
+			model:       "glm-5.2",
+			input:       `{"model":"glm-5.2","reasoning":{"effort":"HIGH"},"messages":[]}`,
+			wantApplied: true,
+			wantPath:    "reasoning.effort",
+			wantValue:   "high",
+		},
+		{
+			name:          "native max unchanged",
+			model:         "glm-5.2",
+			input:         `{"model":"glm-5.2","reasoning_effort":"max","messages":[]}`,
+			wantApplied:   false,
+			wantUnchanged: true,
+		},
+		{
+			name:          "non glm unchanged",
+			model:         "deepseek-v4-pro",
+			input:         `{"model":"deepseek-v4-pro","reasoning_effort":"xhigh","messages":[]}`,
+			wantApplied:   false,
+			wantUnchanged: true,
+		},
+		{
+			name:          "missing effort unchanged",
+			model:         "glm-5.2",
+			input:         `{"model":"glm-5.2","messages":[]}`,
+			wantApplied:   false,
+			wantUnchanged: true,
+		},
+		{
+			name:          "unknown effort unchanged",
+			model:         "glm-5.2",
+			input:         `{"model":"glm-5.2","reasoning_effort":"banana","messages":[]}`,
+			wantApplied:   false,
+			wantUnchanged: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, applied := NormalizeGLMOpenAIReasoningEffort([]byte(tt.input), tt.model)
+			require.Equal(t, tt.wantApplied, applied)
+			if tt.wantUnchanged {
+				require.Equal(t, tt.input, string(got))
+				return
+			}
+			require.Equal(t, tt.wantValue, gjson.GetBytes(got, tt.wantPath).String())
+		})
+	}
+}
+
+func TestMessagesOrInputFromBody(t *testing.T) {
+	wantString := func(value string) *string { return &value }
+	tests := []struct {
+		name string
+		body string
+		want *string
+	}{
+		{name: "messages string", body: `{"messages":[{"role":"user","content":"hello"}]}`, want: wantString("hello")},
+		{name: "messages text blocks", body: `{"messages":[{"role":"user","content":[{"type":"text","text":"hi there"}]}]}`, want: wantString("hi there")},
+		{name: "responses input string", body: `{"input":"do a thing"}`, want: wantString("do a thing")},
+		{name: "responses input array", body: `{"input":[{"role":"user","content":[{"type":"input_text","text":"codex prompt"}]}]}`, want: wantString("codex prompt")},
+		{name: "gemini contents", body: `{"contents":[{"role":"user","parts":[{"text":"gemini prompt"}]}]}`, want: wantString("gemini prompt")},
+		{name: "gemini contents omitted role", body: `{"contents":[{"parts":[{"text":"implicit user prompt"}]}]}`, want: wantString("implicit user prompt")},
+		{name: "messages preferred over input", body: `{"messages":[{"role":"user","content":"messages prompt"}],"input":"responses prompt"}`, want: wantString("messages prompt")},
+		{name: "empty messages falls back to input", body: `{"messages":[],"input":"responses prompt"}`, want: wantString("responses prompt")},
+		{name: "blank input", body: `{"input":"  "}`},
+		{name: "empty object", body: `{}`},
+		{name: "invalid json", body: `not json`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ExtractLastUserMessage(MessagesOrInputFromBody([]byte(tt.body)))
+			if tt.want == nil {
+				require.Nil(t, got)
+				return
+			}
+			require.NotNil(t, got)
+			require.Equal(t, *tt.want, *got)
+		})
+	}
+}
+
+func TestExtractLastUserMessageScansBackPastToolResult(t *testing.T) {
 	messages := []any{
 		map[string]any{"role": "user", "content": "原始用户提问"},
 		map[string]any{"role": "assistant", "content": "调用工具"},
@@ -1265,12 +1647,13 @@ func TestExtractLastUserMessage_ScansBackPastToolResult(t *testing.T) {
 			map[string]any{"type": "tool_result", "tool_use_id": "x", "content": "工具输出"},
 		}},
 	}
+
 	got := ExtractLastUserMessage(messages)
 	require.NotNil(t, got)
 	require.Equal(t, "原始用户提问", *got)
 }
 
-func TestExtractLastUserMessage_PrefersLatestUserText(t *testing.T) {
+func TestExtractLastUserMessagePrefersLatestUserText(t *testing.T) {
 	messages := []any{
 		map[string]any{"role": "user", "content": "第一条"},
 		map[string]any{"role": "assistant", "content": "回复"},
@@ -1278,69 +1661,108 @@ func TestExtractLastUserMessage_PrefersLatestUserText(t *testing.T) {
 			map[string]any{"type": "tool_result", "content": "out"},
 		}},
 		map[string]any{"role": "user", "content": []any{
-			map[string]any{"type": "text", "text": "第二条用户文本"},
+			map[string]any{"type": "input_text", "text": "第二条用户文本"},
 		}},
 	}
+
 	got := ExtractLastUserMessage(messages)
 	require.NotNil(t, got)
 	require.Equal(t, "第二条用户文本", *got)
 }
 
+func TestExtractLastUserMessageJoinsAllTextBlocks(t *testing.T) {
+	messages := []any{
+		map[string]any{"role": "user", "content": []any{
+			map[string]any{"type": "text", "text": "第一段"},
+			map[string]any{"type": "image_url", "image_url": map[string]any{"url": "https://example.com/image.png"}},
+			map[string]any{"type": "input_text", "text": "<session>第二段</session>"},
+		}},
+	}
+
+	got := ExtractLastUserMessage(messages)
+	require.NotNil(t, got)
+	require.Equal(t, "第一段\n第二段", *got)
+}
+
+func TestExtractLastUserMessageJoinsAllGeminiTextParts(t *testing.T) {
+	messages := []any{
+		map[string]any{"role": "user", "parts": []any{
+			map[string]any{"text": "第一段"},
+			map[string]any{"inlineData": map[string]any{"mimeType": "image/png"}},
+			map[string]any{"text": "第二段"},
+		}},
+	}
+
+	got := ExtractLastUserMessage(messages)
+	require.NotNil(t, got)
+	require.Equal(t, "第一段\n第二段", *got)
+}
+
+func TestExtractLastUserMessageGeminiScansPastFunctionResponse(t *testing.T) {
+	messages := []any{
+		map[string]any{"role": "user", "parts": []any{
+			map[string]any{"text": "请查询天气"},
+		}},
+		map[string]any{"role": "model", "parts": []any{
+			map[string]any{"text": "我来查询"},
+		}},
+		map[string]any{"role": "user", "parts": []any{
+			map[string]any{"functionResponse": map[string]any{"name": "weather"}},
+		}},
+	}
+
+	got := ExtractLastUserMessage(messages)
+	require.NotNil(t, got)
+	require.Equal(t, "请查询天气", *got)
+}
+
 func TestStripOrchestration(t *testing.T) {
-	cases := []struct {
+	tests := []struct {
 		name string
 		in   string
 		want string
 	}{
-		{"plain human text", "继续", "继续"},
-		{"human text with trailing reminder", "继续<system-reminder>This is an injected reminder.</system-reminder>", "继续"},
-		{"human text with leading reminder", "<system-reminder>foo</system-reminder>真正的问题", "真正的问题"},
-		{"reminder in the middle", "前<system-reminder>x</system-reminder>后", "前后"},
-		{"multiline reminder", "你好<system-reminder>line1\nline2\nline3</system-reminder>", "你好"},
-		{"pure reminder becomes empty", "<system-reminder>only orchestration</system-reminder>", ""},
-		{"multiple reminders", "<system-reminder>a</system-reminder>core<system-reminder>b</system-reminder>", "core"},
-		{"command tags stripped", "<command-name>/login</command-name><command-message>login</command-message>实际内容", "实际内容"},
-		{"local-command-stdout stripped", "结果<local-command-stdout>some output</local-command-stdout>", "结果"},
-		{"session wrapper keeps inner", "<session>\n/usage-report 上周\n</session>", "/usage-report 上周"},
-		{"session wrapper with nested reminder", "<session>继续<system-reminder>x</system-reminder></session>", "继续"},
-		{"programmatic payload kept", "[MODE:REALTIME] scan target 10.0.0.1", "[MODE:REALTIME] scan target 10.0.0.1"},
-		{"empty input", "", ""},
+		{name: "plain human text", in: "继续", want: "继续"},
+		{name: "trailing reminder", in: "继续<system-reminder>This is injected.</system-reminder>", want: "继续"},
+		{name: "leading reminder", in: "<system-reminder>foo</system-reminder>真正的问题", want: "真正的问题"},
+		{name: "middle reminder", in: "前<system-reminder>x</system-reminder>后", want: "前后"},
+		{name: "multiline reminder", in: "你好<system-reminder>line1\nline2</system-reminder>", want: "你好"},
+		{name: "pure reminder", in: "<system-reminder>only orchestration</system-reminder>"},
+		{name: "multiple reminders", in: "<system-reminder>a</system-reminder>core<system-reminder>b</system-reminder>", want: "core"},
+		{name: "command blocks", in: "<command-name>/login</command-name><command-message>login</command-message>实际内容", want: "实际内容"},
+		{name: "local command output", in: "结果<local-command-stdout>some output</local-command-stdout>", want: "结果"},
+		{name: "session wrapper", in: "<session>\n/usage-report 上周\n</session>", want: "/usage-report 上周"},
+		{name: "session with reminder", in: "<session>继续<system-reminder>x</system-reminder></session>", want: "继续"},
+		{name: "programmatic payload", in: "[MODE:REALTIME] scan target 10.0.0.1", want: "[MODE:REALTIME] scan target 10.0.0.1"},
+		{name: "empty input"},
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			require.Equal(t, tc.want, stripOrchestration(tc.in))
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, stripOrchestration(tt.in))
 		})
 	}
 }
 
-func TestExtractLastUserMessage_StripsReminderFromHumanText(t *testing.T) {
-	// Claude Code 把 <system-reminder> 注入进 user 文本，只保留人类敲入的部分。
-	messages := []any{
-		map[string]any{"role": "user", "content": "继续<system-reminder>injected orchestration\nmore lines</system-reminder>"},
-	}
-	got := ExtractLastUserMessage(messages)
-	require.NotNil(t, got)
-	require.Equal(t, "继续", *got)
-}
-
-func TestExtractLastUserMessage_SkipsPureOrchestrationBlock(t *testing.T) {
-	// 最后一条 user 文本块整段是编排内容，应跳过回溯到真正的人类输入。
+func TestExtractLastUserMessageSkipsPureOrchestration(t *testing.T) {
 	messages := []any{
 		map[string]any{"role": "user", "content": "人类真实提问"},
 		map[string]any{"role": "assistant", "content": "回复"},
 		map[string]any{"role": "user", "content": []any{
-			map[string]any{"type": "text", "text": "<system-reminder>pure orchestration, no human text</system-reminder>"},
+			map[string]any{"type": "text", "text": "<system-reminder>pure orchestration</system-reminder>"},
 		}},
 	}
+
 	got := ExtractLastUserMessage(messages)
 	require.NotNil(t, got)
 	require.Equal(t, "人类真实提问", *got)
 }
 
-func TestExtractLastUserMessage_KeepsProgrammaticPayload(t *testing.T) {
+func TestExtractLastUserMessageKeepsProgrammaticPayload(t *testing.T) {
 	messages := []any{
 		map[string]any{"role": "user", "content": "[MODE:REALTIME] do the scan"},
 	}
+
 	got := ExtractLastUserMessage(messages)
 	require.NotNil(t, got)
 	require.Equal(t, "[MODE:REALTIME] do the scan", *got)
