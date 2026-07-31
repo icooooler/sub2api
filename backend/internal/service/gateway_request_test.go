@@ -1651,6 +1651,8 @@ func TestMessagesOrInputFromBody(t *testing.T) {
 		{name: "messages text blocks", body: `{"messages":[{"role":"user","content":[{"type":"text","text":"hi there"}]}]}`, want: wantString("hi there")},
 		{name: "responses input string", body: `{"input":"do a thing"}`, want: wantString("do a thing")},
 		{name: "responses input array", body: `{"input":[{"role":"user","content":[{"type":"input_text","text":"codex prompt"}]}]}`, want: wantString("codex prompt")},
+		{name: "responses input object", body: `{"input":{"role":"user","content":[{"type":"input_text","text":"object prompt"}]}}`, want: wantString("object prompt")},
+		{name: "responses websocket nested input", body: `{"type":"response.create","response":{"input":"websocket prompt"}}`, want: wantString("websocket prompt")},
 		{name: "gemini contents", body: `{"contents":[{"role":"user","parts":[{"text":"gemini prompt"}]}]}`, want: wantString("gemini prompt")},
 		{name: "gemini contents omitted role", body: `{"contents":[{"parts":[{"text":"implicit user prompt"}]}]}`, want: wantString("implicit user prompt")},
 		{name: "messages preferred over input", body: `{"messages":[{"role":"user","content":"messages prompt"}],"input":"responses prompt"}`, want: wantString("messages prompt")},
@@ -1662,7 +1664,7 @@ func TestMessagesOrInputFromBody(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := ExtractLastUserMessage(MessagesOrInputFromBody([]byte(tt.body)))
+			got := ExtractManualUserPromptFromBody([]byte(tt.body))
 			if tt.want == nil {
 				require.Nil(t, got)
 				return
@@ -1673,38 +1675,68 @@ func TestMessagesOrInputFromBody(t *testing.T) {
 	}
 }
 
-func TestExtractLastUserMessageScansBackPastToolResult(t *testing.T) {
-	messages := []any{
-		map[string]any{"role": "user", "content": "原始用户提问"},
-		map[string]any{"role": "assistant", "content": "调用工具"},
-		map[string]any{"role": "user", "content": []any{
-			map[string]any{"type": "tool_result", "tool_use_id": "x", "content": "工具输出"},
-		}},
+func TestExtractManualUserPromptToolContinuationsAreEmpty(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{
+			name: "anthropic tool result",
+			body: `{"messages":[
+				{"role":"user","content":"原始用户提问"},
+				{"role":"assistant","content":[{"type":"tool_use","id":"x"}]},
+				{"role":"user","content":[{"type":"tool_result","tool_use_id":"x","content":"工具输出"}]}
+			]}`,
+		},
+		{
+			name: "openai chat tool output",
+			body: `{"messages":[
+				{"role":"user","content":"原始用户提问"},
+				{"role":"assistant","tool_calls":[{"id":"x","type":"function"}]},
+				{"role":"tool","tool_call_id":"x","content":"工具输出"}
+			]}`,
+		},
+		{
+			name: "responses function output",
+			body: `{"input":[
+				{"type":"message","role":"user","content":[{"type":"input_text","text":"原始用户提问"}]},
+				{"type":"function_call","call_id":"x","name":"run","arguments":"{}"},
+				{"type":"function_call_output","call_id":"x","output":"工具输出"}
+			]}`,
+		},
+		{
+			name: "gemini function response",
+			body: `{"contents":[
+				{"role":"user","parts":[{"text":"原始用户提问"}]},
+				{"role":"model","parts":[{"functionCall":{"name":"run"}}]},
+				{"role":"user","parts":[{"functionResponse":{"name":"run","response":{"ok":true}}}]}
+			]}`,
+		},
 	}
 
-	got := ExtractLastUserMessage(messages)
-	require.NotNil(t, got)
-	require.Equal(t, "原始用户提问", *got)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Nil(t, ExtractManualUserPromptFromBody([]byte(tt.body)))
+		})
+	}
 }
 
-func TestExtractLastUserMessagePrefersLatestUserText(t *testing.T) {
+func TestExtractManualUserPromptUsesCurrentManualTextAfterToolResult(t *testing.T) {
 	messages := []any{
 		map[string]any{"role": "user", "content": "第一条"},
 		map[string]any{"role": "assistant", "content": "回复"},
 		map[string]any{"role": "user", "content": []any{
-			map[string]any{"type": "tool_result", "content": "out"},
-		}},
-		map[string]any{"role": "user", "content": []any{
+			map[string]any{"type": "tool_result", "content": "工具输出"},
 			map[string]any{"type": "input_text", "text": "第二条用户文本"},
 		}},
 	}
 
-	got := ExtractLastUserMessage(messages)
+	got := ExtractManualUserPrompt(messages)
 	require.NotNil(t, got)
 	require.Equal(t, "第二条用户文本", *got)
 }
 
-func TestExtractLastUserMessageJoinsAllTextBlocks(t *testing.T) {
+func TestExtractManualUserPromptJoinsCurrentTextBlocks(t *testing.T) {
 	messages := []any{
 		map[string]any{"role": "user", "content": []any{
 			map[string]any{"type": "text", "text": "第一段"},
@@ -1713,12 +1745,12 @@ func TestExtractLastUserMessageJoinsAllTextBlocks(t *testing.T) {
 		}},
 	}
 
-	got := ExtractLastUserMessage(messages)
+	got := ExtractManualUserPrompt(messages)
 	require.NotNil(t, got)
 	require.Equal(t, "第一段\n第二段", *got)
 }
 
-func TestExtractLastUserMessageJoinsAllGeminiTextParts(t *testing.T) {
+func TestExtractManualUserPromptJoinsCurrentGeminiTextParts(t *testing.T) {
 	messages := []any{
 		map[string]any{"role": "user", "parts": []any{
 			map[string]any{"text": "第一段"},
@@ -1727,77 +1759,85 @@ func TestExtractLastUserMessageJoinsAllGeminiTextParts(t *testing.T) {
 		}},
 	}
 
-	got := ExtractLastUserMessage(messages)
+	got := ExtractManualUserPrompt(messages)
 	require.NotNil(t, got)
 	require.Equal(t, "第一段\n第二段", *got)
 }
 
-func TestExtractLastUserMessageGeminiScansPastFunctionResponse(t *testing.T) {
-	messages := []any{
-		map[string]any{"role": "user", "parts": []any{
-			map[string]any{"text": "请查询天气"},
-		}},
-		map[string]any{"role": "model", "parts": []any{
-			map[string]any{"text": "我来查询"},
-		}},
-		map[string]any{"role": "user", "parts": []any{
-			map[string]any{"functionResponse": map[string]any{"name": "weather"}},
-		}},
-	}
-
-	got := ExtractLastUserMessage(messages)
-	require.NotNil(t, got)
-	require.Equal(t, "请查询天气", *got)
-}
-
-func TestStripOrchestration(t *testing.T) {
+func TestStripAgentPackaging(t *testing.T) {
 	tests := []struct {
-		name string
-		in   string
-		want string
+		name          string
+		in            string
+		want          string
+		wantPackaging bool
 	}{
 		{name: "plain human text", in: "继续", want: "继续"},
-		{name: "trailing reminder", in: "继续<system-reminder>This is injected.</system-reminder>", want: "继续"},
-		{name: "leading reminder", in: "<system-reminder>foo</system-reminder>真正的问题", want: "真正的问题"},
-		{name: "middle reminder", in: "前<system-reminder>x</system-reminder>后", want: "前后"},
-		{name: "multiline reminder", in: "你好<system-reminder>line1\nline2</system-reminder>", want: "你好"},
-		{name: "pure reminder", in: "<system-reminder>only orchestration</system-reminder>"},
-		{name: "multiple reminders", in: "<system-reminder>a</system-reminder>core<system-reminder>b</system-reminder>", want: "core"},
-		{name: "command blocks", in: "<command-name>/login</command-name><command-message>login</command-message>实际内容", want: "实际内容"},
-		{name: "local command output", in: "结果<local-command-stdout>some output</local-command-stdout>", want: "结果"},
-		{name: "session wrapper", in: "<session>\n/usage-report 上周\n</session>", want: "/usage-report 上周"},
-		{name: "session with reminder", in: "<session>继续<system-reminder>x</system-reminder></session>", want: "继续"},
+		{name: "trailing reminder", in: "继续<system-reminder>This is injected.</system-reminder>", want: "继续", wantPackaging: true},
+		{name: "environment context", in: "<environment_context><cwd>/workspace</cwd></environment_context>\n真正的问题", want: "真正的问题", wantPackaging: true},
+		{name: "permissions context", in: "真正的问题\n<permissions instructions>danger-full-access</permissions instructions>", want: "真正的问题", wantPackaging: true},
+		{name: "codex app context", in: "<app-context>desktop metadata</app-context>\n真正的问题", want: "真正的问题", wantPackaging: true},
+		{name: "plugin and skill context", in: "<recommended_plugins>plugins</recommended_plugins><skills_instructions>skills</skills_instructions>真正的问题", want: "真正的问题", wantPackaging: true},
+		{name: "pure reminder", in: "<system-reminder>only orchestration</system-reminder>", wantPackaging: true},
+		{name: "command blocks", in: "<command-name>/login</command-name><command-message>login</command-message>实际内容", want: "实际内容", wantPackaging: true},
+		{name: "session wrapper", in: "<session>\n/usage-report 上周\n</session>", want: "/usage-report 上周", wantPackaging: true},
+		{name: "agents instructions", in: "# AGENTS.md instructions\n<INSTRUCTIONS>rules</INSTRUCTIONS>", wantPackaging: true},
+		{name: "malformed known wrapper is conservative", in: "<system-reminder>injected without close", wantPackaging: true},
 		{name: "programmatic payload", in: "[MODE:REALTIME] scan target 10.0.0.1", want: "[MODE:REALTIME] scan target 10.0.0.1"},
 		{name: "empty input"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			require.Equal(t, tt.want, stripOrchestration(tt.in))
+			got, packaged := stripAgentPackaging(tt.in)
+			require.Equal(t, tt.want, got)
+			require.Equal(t, tt.wantPackaging, packaged)
 		})
 	}
 }
 
-func TestExtractLastUserMessageSkipsPureOrchestration(t *testing.T) {
-	messages := []any{
-		map[string]any{"role": "user", "content": "人类真实提问"},
-		map[string]any{"role": "assistant", "content": "回复"},
-		map[string]any{"role": "user", "content": []any{
-			map[string]any{"type": "text", "text": "<system-reminder>pure orchestration</system-reminder>"},
-		}},
-	}
+func TestExtractManualUserPromptCodexPackagingAfterPrompt(t *testing.T) {
+	body := []byte(`{
+		"input":[
+			{"type":"message","role":"developer","content":[{"type":"input_text","text":"developer instructions"}]},
+			{"type":"message","role":"user","content":[{"type":"input_text","text":"用户自己输入的提示词"}]},
+			{"type":"message","role":"user","content":[
+				{"type":"input_text","text":"<recommended_plugins>plugin metadata</recommended_plugins>"},
+				{"type":"input_text","text":"<environment_context><cwd>/workspace</cwd></environment_context>"},
+				{"type":"input_text","text":"<permissions instructions>danger-full-access</permissions instructions>"}
+			]}
+		]
+	}`)
 
-	got := ExtractLastUserMessage(messages)
+	got := ExtractManualUserPromptFromBody(body)
 	require.NotNil(t, got)
-	require.Equal(t, "人类真实提问", *got)
+	require.Equal(t, "用户自己输入的提示词", *got)
 }
 
-func TestExtractLastUserMessageKeepsProgrammaticPayload(t *testing.T) {
-	messages := []any{
-		map[string]any{"role": "user", "content": "[MODE:REALTIME] do the scan"},
-	}
+func TestExtractManualUserPromptAnthropicHarnessBlocks(t *testing.T) {
+	body := []byte(`{
+		"messages":[{
+			"role":"user",
+			"content":[
+				{"type":"text","text":"# AGENTS.md instructions\n<INSTRUCTIONS>project rules</INSTRUCTIONS>"},
+				{"type":"text","text":"<environment_context><cwd>/workspace</cwd></environment_context>"},
+				{"type":"text","text":"用户真正输入的内容"}
+			]
+		}]
+	}`)
 
-	got := ExtractLastUserMessage(messages)
+	got := ExtractManualUserPromptFromBody(body)
 	require.NotNil(t, got)
-	require.Equal(t, "[MODE:REALTIME] do the scan", *got)
+	require.Equal(t, "用户真正输入的内容", *got)
+}
+
+func TestExtractManualUserPromptDoesNotCrossConversationBoundary(t *testing.T) {
+	body := []byte(`{
+		"messages":[
+			{"role":"user","content":"历史问题"},
+			{"role":"assistant","content":"历史回答"},
+			{"role":"user","content":"<environment_context><cwd>/workspace</cwd></environment_context>"}
+		]
+	}`)
+
+	require.Nil(t, ExtractManualUserPromptFromBody(body))
 }

@@ -1481,94 +1481,220 @@ func NormalizeChineseLLMThinking(body []byte, mappedModel string) ([]byte, bool)
 	return modified, true
 }
 
-// orchestrationBlockPattern matches injected orchestration blocks whose tags and
-// contents are not part of the human-authored prompt.
-var orchestrationBlockPattern = regexp.MustCompile(
-	`(?s)<(system-reminder|command-name|command-message|command-args|local-command-stdout|local-command-stderr)>.*?</(system-reminder|command-name|command-message|command-args|local-command-stdout|local-command-stderr)>`,
-)
-
-// orchestrationWrapperPattern matches wrappers whose inner text is the actual
-// human input. Strip only the wrapper tags and keep their contents.
-var orchestrationWrapperPattern = regexp.MustCompile(`</?session>`)
-
-// stripOrchestration removes agent-client orchestration while retaining the
-// human-authored part of the text. An empty result means the text was entirely
-// orchestration and should be ignored by the caller.
-func stripOrchestration(text string) string {
-	if text == "" {
-		return ""
-	}
-	cleaned := orchestrationBlockPattern.ReplaceAllString(text, "")
-	cleaned = orchestrationWrapperPattern.ReplaceAllString(cleaned, "")
-	return strings.TrimSpace(cleaned)
+var agentPackagingBlockTags = []string{
+	"system-reminder",
+	"command-name",
+	"command-message",
+	"command-args",
+	"local-command-stdout",
+	"local-command-stderr",
+	"environment_context",
+	"permissions instructions",
+	"app-context",
+	"recommended_plugins",
+	"collaboration_mode",
+	"apps_instructions",
+	"plugins_instructions",
+	"skills_instructions",
+	"instructions",
 }
 
-// ExtractLastUserMessage scans backwards for the latest user message that
-// contains human-authored text. It supports Anthropic/OpenAI string content and
-// text/input_text content blocks, while skipping tool-result continuations and
-// orchestration-only messages.
-func ExtractLastUserMessage(messages []any) *string {
+var (
+	agentPackagingBlockPatterns  = compileAgentPackagingBlockPatterns()
+	agentPackagingWrapperPattern = regexp.MustCompile(`(?is)</?session(?:\s[^>]*)?>`)
+)
+
+func compileAgentPackagingBlockPatterns() []*regexp.Regexp {
+	patterns := make([]*regexp.Regexp, 0, len(agentPackagingBlockTags))
+	for _, tag := range agentPackagingBlockTags {
+		quoted := regexp.QuoteMeta(tag)
+		patterns = append(patterns, regexp.MustCompile(
+			`(?is)<`+quoted+`(?:\s[^>]*)?>.*?</`+quoted+`\s*>`,
+		))
+	}
+	return patterns
+}
+
+// stripAgentPackaging removes only known agent/client-injected blocks. The
+// <session> wrapper is special: it encloses text typed by the user, so only its
+// tags are removed. The bool reports whether packaging was detected even when
+// no manual text remains.
+func stripAgentPackaging(text string) (string, bool) {
+	if text == "" {
+		return "", false
+	}
+	cleaned := text
+	hadPackaging := false
+	for _, pattern := range agentPackagingBlockPatterns {
+		next := pattern.ReplaceAllString(cleaned, "")
+		if next != cleaned {
+			hadPackaging = true
+			cleaned = next
+		}
+	}
+	next := agentPackagingWrapperPattern.ReplaceAllString(cleaned, "")
+	if next != cleaned {
+		hadPackaging = true
+		cleaned = next
+	}
+	cleaned = strings.TrimSpace(cleaned)
+	if isAgentOnlyPromptBlock(cleaned) {
+		return "", true
+	}
+	return cleaned, hadPackaging
+}
+
+func isAgentOnlyPromptBlock(text string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(text))
+	if normalized == "" {
+		return false
+	}
+	if strings.HasPrefix(normalized, "# agents.md instructions") {
+		return true
+	}
+	for _, tag := range agentPackagingBlockTags {
+		if strings.HasPrefix(normalized, "<"+strings.ToLower(tag)) {
+			return true
+		}
+	}
+	return false
+}
+
+func isToolContinuationItem(message map[string]any) bool {
+	role := strings.ToLower(strings.TrimSpace(stringValue(message["role"])))
+	if role == "assistant" || role == "model" || role == "tool" || role == "function" {
+		return true
+	}
+	switch strings.ToLower(strings.TrimSpace(stringValue(message["type"]))) {
+	case "function_call", "function_call_output", "tool_call", "tool_result", "tool_use", "tool_use_result":
+		return true
+	}
+	return false
+}
+
+func appendManualPromptText(textParts *[]string, text string, sawPackaging *bool) {
+	cleaned, packaged := stripAgentPackaging(text)
+	if packaged {
+		*sawPackaging = true
+	}
+	if cleaned != "" {
+		*textParts = append(*textParts, cleaned)
+	}
+}
+
+func manualPromptParts(message map[string]any) (textParts []string, sawPackaging bool, sawContinuation bool) {
+	textParts = make([]string, 0, 1)
+	switch content := message["content"].(type) {
+	case string:
+		appendManualPromptText(&textParts, content, &sawPackaging)
+	case []any:
+		for _, rawBlock := range content {
+			switch block := rawBlock.(type) {
+			case string:
+				appendManualPromptText(&textParts, block, &sawPackaging)
+			case map[string]any:
+				switch strings.ToLower(strings.TrimSpace(stringValue(block["type"]))) {
+				case "tool_result", "tool_use_result", "function_call", "function_call_output":
+					sawContinuation = true
+					continue
+				case "", "text", "input_text":
+					if text, ok := block["text"].(string); ok {
+						appendManualPromptText(&textParts, text, &sawPackaging)
+					}
+				}
+			}
+		}
+	}
+
+	// Gemini native requests use contents[].parts[].text instead of content.
+	if parts, ok := message["parts"].([]any); ok {
+		for _, rawPart := range parts {
+			part, ok := rawPart.(map[string]any)
+			if !ok {
+				continue
+			}
+			if _, ok := part["functionResponse"]; ok {
+				sawContinuation = true
+			}
+			if _, ok := part["function_response"]; ok {
+				sawContinuation = true
+			}
+			if _, ok := part["functionCall"]; ok {
+				sawContinuation = true
+			}
+			if _, ok := part["function_call"]; ok {
+				sawContinuation = true
+			}
+			if text, ok := part["text"].(string); ok {
+				appendManualPromptText(&textParts, text, &sawPackaging)
+			}
+		}
+	}
+
+	if len(textParts) == 0 {
+		switch strings.ToLower(strings.TrimSpace(stringValue(message["type"]))) {
+		case "", "text", "input_text":
+			if text, ok := message["text"].(string); ok {
+				appendManualPromptText(&textParts, text, &sawPackaging)
+			}
+		}
+	}
+	return textParts, sawPackaging, sawContinuation
+}
+
+// ExtractManualUserPrompt returns only text manually entered for the current
+// turn. It may scan past adjacent packaging-only user items, but it never scans
+// past an assistant/tool/function continuation into an older conversation turn.
+func ExtractManualUserPrompt(messages []any) *string {
 	for i := len(messages) - 1; i >= 0; i-- {
+		if text, ok := messages[i].(string); ok {
+			cleaned, packaged := stripAgentPackaging(text)
+			if cleaned != "" {
+				return &cleaned
+			}
+			if packaged {
+				continue
+			}
+			return nil
+		}
+
 		message, ok := messages[i].(map[string]any)
 		if !ok {
-			continue
+			return nil
 		}
-		role, _ := message["role"].(string)
+		if isToolContinuationItem(message) {
+			return nil
+		}
+
+		role := strings.ToLower(strings.TrimSpace(stringValue(message["role"])))
 		_, hasGeminiParts := message["parts"]
-		// Gemini accepts content entries with an omitted role and treats them as
-		// user input. Other protocols must explicitly mark the message as user.
-		if role != "user" && !(role == "" && hasGeminiParts) {
-			continue
+		messageType := strings.ToLower(strings.TrimSpace(stringValue(message["type"])))
+		implicitResponsesUser := role == "" &&
+			(messageType == "" || messageType == "message" || messageType == "text" || messageType == "input_text")
+		if role != "user" && !(role == "" && hasGeminiParts) && !implicitResponsesUser {
+			return nil
 		}
 
-		textParts := make([]string, 0, 1)
-		switch content := message["content"].(type) {
-		case string:
-			if cleaned := stripOrchestration(content); cleaned != "" {
-				textParts = append(textParts, cleaned)
-			}
-		case []any:
-			for _, rawBlock := range content {
-				block, ok := rawBlock.(map[string]any)
-				if !ok {
-					continue
-				}
-				blockType, _ := block["type"].(string)
-				if blockType != "text" && blockType != "input_text" {
-					continue
-				}
-				text, ok := block["text"].(string)
-				if !ok {
-					continue
-				}
-				if cleaned := stripOrchestration(text); cleaned != "" {
-					textParts = append(textParts, cleaned)
-				}
-			}
-		}
-
-		// Gemini native requests use contents[].parts[].text instead of content.
-		if parts, ok := message["parts"].([]any); ok {
-			for _, rawPart := range parts {
-				part, ok := rawPart.(map[string]any)
-				if !ok {
-					continue
-				}
-				text, ok := part["text"].(string)
-				if !ok {
-					continue
-				}
-				if cleaned := stripOrchestration(text); cleaned != "" {
-					textParts = append(textParts, cleaned)
-				}
-			}
-		}
+		textParts, sawPackaging, sawContinuation := manualPromptParts(message)
 		if len(textParts) > 0 {
 			joined := strings.Join(textParts, "\n")
 			return &joined
 		}
+		if sawContinuation {
+			return nil
+		}
+		if sawPackaging {
+			continue
+		}
+		return nil
 	}
 	return nil
+}
+
+// ExtractLastUserMessage is retained for callers compiled against the previous
+// helper name. Its semantics now match ExtractManualUserPrompt.
+func ExtractLastUserMessage(messages []any) *string {
+	return ExtractManualUserPrompt(messages)
 }
 
 // MessagesFromBytes returns the messages array from a raw JSON request body.
@@ -1588,27 +1714,34 @@ func MessagesFromBytes(body []byte) []any {
 // Chat/Anthropic messages or OpenAI Responses input. This raw-body fallback is
 // required on passthrough paths that do not cache a decoded request body.
 func MessagesOrInputFromBody(body []byte) []any {
-	if len(body) == 0 {
+	if len(body) == 0 || !gjson.ValidBytes(body) {
 		return nil
-	}
-	var payload map[string]any
-	if err := json.Unmarshal(body, &payload); err != nil {
-		return nil
-	}
-	if messages, ok := payload["messages"].([]any); ok && len(messages) > 0 {
-		return messages
-	}
-	if contents, ok := payload["contents"].([]any); ok && len(contents) > 0 {
-		return contents
 	}
 
-	switch input := payload["input"].(type) {
-	case []any:
-		return input
-	case string:
-		if strings.TrimSpace(input) != "" {
-			return []any{map[string]any{"role": "user", "content": input}}
+	for _, path := range []string{"messages", "contents", "input", "response.input"} {
+		value := gjson.GetBytes(body, path)
+		switch {
+		case value.IsArray():
+			var items []any
+			if err := json.Unmarshal([]byte(value.Raw), &items); err == nil && len(items) > 0 {
+				return items
+			}
+		case value.IsObject():
+			var item map[string]any
+			if err := json.Unmarshal([]byte(value.Raw), &item); err == nil {
+				return []any{item}
+			}
+		case value.Type == gjson.String:
+			if input := value.String(); strings.TrimSpace(input) != "" {
+				return []any{map[string]any{"role": "user", "content": input}}
+			}
 		}
 	}
 	return nil
+}
+
+// ExtractManualUserPromptFromBody extracts the current turn's manually entered
+// prompt from the inbound request before any upstream rewrite occurs.
+func ExtractManualUserPromptFromBody(body []byte) *string {
+	return ExtractManualUserPrompt(MessagesOrInputFromBody(body))
 }

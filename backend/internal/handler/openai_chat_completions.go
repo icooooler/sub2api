@@ -141,7 +141,7 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 
 	sessionHash := h.gatewayService.GenerateSessionHash(c, body)
 	promptCacheKey := h.gatewayService.ExtractSessionID(c, body)
-	inputContent := inputContentFromContextOrBody(c, body)
+	inputContent := inputContentFromBody(body)
 
 	maxAccountSwitches := h.maxAccountSwitches
 	switchCount := 0

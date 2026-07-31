@@ -79,34 +79,10 @@ func claudeCodeBodyMapFromParsedRequest(parsedReq *service.ParsedRequest) map[st
 	return bodyMap
 }
 
-// inputContentFromParsedRequestOrBody snapshots the latest human-authored input
-// before an async usage worker is submitted. Prefer ParsedRequest's lightweight
-// accessor and fall back to the raw body for passthrough and Responses/Gemini
-// shapes that are not exposed through DecodeMessages.
-func inputContentFromParsedRequestOrBody(parsed *service.ParsedRequest, body []byte) *string {
-	if parsed != nil {
-		var messages []any
-		if err := parsed.DecodeMessages(&messages); err == nil && len(messages) > 0 {
-			if inputContent := service.ExtractLastUserMessage(messages); inputContent != nil {
-				return inputContent
-			}
-		}
-	}
-	return service.ExtractLastUserMessage(service.MessagesOrInputFromBody(body))
-}
-
-// inputContentFromContextOrBody reuses a parsed request cached by the gateway
-// service when available. Passthrough fast paths do not populate that cache, so
-// the original request body remains the required fallback.
-func inputContentFromContextOrBody(c *gin.Context, body []byte) *string {
-	if c != nil {
-		if cached, ok := c.Get("parsed_request"); ok {
-			if parsed, ok := cached.(*service.ParsedRequest); ok && parsed != nil {
-				return inputContentFromParsedRequestOrBody(parsed, body)
-			}
-		}
-	}
-	return inputContentFromParsedRequestOrBody(nil, body)
+// inputContentFromBody snapshots only the prompt manually entered for the
+// current turn. It must receive the inbound body before any upstream rewrite.
+func inputContentFromBody(body []byte) *string {
+	return service.ExtractManualUserPromptFromBody(body)
 }
 
 type openAIWSInputContentSnapshot struct {
@@ -121,7 +97,7 @@ type openAIWSInputContentSnapshots struct {
 
 func (s *openAIWSInputContentSnapshots) Store(turn int, payload []byte) {
 	s.turns.Store(turn, openAIWSInputContentSnapshot{
-		value: inputContentFromParsedRequestOrBody(nil, payload),
+		value: inputContentFromBody(payload),
 	})
 }
 

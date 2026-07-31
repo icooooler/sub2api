@@ -156,7 +156,7 @@ func (h *GatewayHandler) Responses(c *gin.Context) {
 		UserAgent: c.GetHeader("User-Agent"),
 		APIKeyID:  apiKey.ID,
 	}
-	inputContent := inputContentFromParsedRequestOrBody(parsedReq, body)
+	inputContent := inputContentFromBody(body)
 	sessionHash := h.gatewayService.GenerateSessionHash(parsedReq)
 
 	// 3. Account selection + failover loop
