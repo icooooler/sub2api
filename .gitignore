@@ -146,3 +146,7 @@ aicodex
 output/
 .neuralmemory/
 usage-reports/
+.codegraph/
+
+# Vitest / Vite cache at repo root
+.vite/
