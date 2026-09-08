@@ -22,8 +22,9 @@ const (
 // (see responseModelBillingDeclaration).
 //
 // The same observer also records the service tier the upstream reports having
-// used (OpenAI service_tier, Anthropic usage.speed). Billing consumes it through
-// ResolveBillingServiceTier, which only ever lowers the tier a request asked for.
+// used (OpenAI service_tier, Anthropic usage.speed). The observed tier stays
+// separate from the final outbound request tier until usage recording resolves
+// the billable tier for the selected credential protocol.
 type upstreamResponseModelObserver struct {
 	first    string
 	terminal string
@@ -214,6 +215,20 @@ func observedUpstreamResponseModelConflict(c *gin.Context) bool {
 
 func observedUpstreamResponseServiceTier(c *gin.Context) string {
 	return upstreamResponseModelObserverFromContext(c).ServiceTier()
+}
+
+// resolvedOpenAIUpstreamServiceTierFromObserver preserves the final outbound
+// request tier. The observed response tier remains separate on
+// OpenAIForwardResult.UpstreamResponseServiceTier and is reconciled once, at
+// usage time, where the account protocol is available. In particular, the
+// private ChatGPT Codex backend commonly reports default even for effective
+// Fast turns, while public API response tiers remain authoritative.
+func resolvedOpenAIUpstreamServiceTierFromObserver(_ *upstreamResponseModelObserver, outboundBodyTier *string) *string {
+	return outboundBodyTier
+}
+
+func resolvedOpenAIUpstreamServiceTier(c *gin.Context, outboundBodyTier *string) *string {
+	return resolvedOpenAIUpstreamServiceTierFromObserver(upstreamResponseModelObserverFromContext(c), outboundBodyTier)
 }
 
 func observeOpenAISSEBody(observer *upstreamResponseModelObserver, body string) {
