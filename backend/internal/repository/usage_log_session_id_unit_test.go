@@ -38,18 +38,18 @@ func TestPrepareUsageLogInsert_SessionIDArgWiring(t *testing.T) {
 	require.Len(t, prepared.args, len(usageLogInsertArgTypes),
 		"prepared args must match the arg-type table length")
 
-	// input_content is last; created_at is penultimate; native_compaction_v2 and
-	// session_id precede them.
-	sessionArg := prepared.args[len(prepared.args)-4]
+	// input_content and created_at follow the two cache TTL columns;
+	// native_compaction_v2 and session_id precede those columns.
+	sessionArg := prepared.args[len(prepared.args)-6]
 	ns, ok := sessionArg.(sql.NullString)
 	require.True(t, ok, "session_id arg should be a sql.NullString, got %T", sessionArg)
 	require.True(t, ns.Valid)
 	require.Equal(t, sessionID, ns.String)
 
-	require.Len(t, usageLogInsertArgTypes, 63)
-	require.Equal(t, "text", usageLogInsertArgTypes[len(usageLogInsertArgTypes)-4],
+	require.Len(t, usageLogInsertArgTypes, 65)
+	require.Equal(t, "text", usageLogInsertArgTypes[len(usageLogInsertArgTypes)-6],
 		"session_id arg type must be text")
-	require.Equal(t, "boolean", usageLogInsertArgTypes[len(usageLogInsertArgTypes)-3],
+	require.Equal(t, "boolean", usageLogInsertArgTypes[len(usageLogInsertArgTypes)-5],
 		"native_compaction_v2 arg type must be boolean")
 	require.Equal(t, "timestamptz", usageLogInsertArgTypes[len(usageLogInsertArgTypes)-2],
 		"created_at arg type must be timestamptz")
@@ -61,14 +61,14 @@ func TestPrepareUsageLogInsert_SessionIDArgWiring(t *testing.T) {
 // persisted as SQL NULL rather than an empty string.
 func TestPrepareUsageLogInsert_SessionIDNullWhenAbsent(t *testing.T) {
 	prepared := prepareUsageLogInsert(newSessionIDUsageLog(nil))
-	sessionArg := prepared.args[len(prepared.args)-4]
+	sessionArg := prepared.args[len(prepared.args)-6]
 	ns, ok := sessionArg.(sql.NullString)
 	require.True(t, ok, "session_id arg should be a sql.NullString, got %T", sessionArg)
 	require.False(t, ns.Valid, "absent session id must be NULL, not empty string")
 
 	empty := ""
 	preparedEmpty := prepareUsageLogInsert(newSessionIDUsageLog(&empty))
-	nsEmpty := preparedEmpty.args[len(preparedEmpty.args)-4].(sql.NullString)
+	nsEmpty := preparedEmpty.args[len(preparedEmpty.args)-6].(sql.NullString)
 	require.False(t, nsEmpty.Valid, "empty session id must also be NULL")
 }
 
